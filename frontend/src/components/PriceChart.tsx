@@ -1,0 +1,158 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+import {
+  CandlestickSeries,
+  ColorType,
+  HistogramSeries,
+  LineSeries,
+  LineStyle,
+  createChart,
+  createSeriesMarkers,
+  type IChartApi,
+  type ISeriesMarkersPluginApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type UTCTimestamp,
+} from "lightweight-charts";
+import type { CandleData, Point, Scenario, SignalMarker } from "@/lib/types";
+
+const IST_OFFSET = 5.5 * 3600;
+// Lightweight Charts renders timestamps as UTC; shift so the axis reads in IST.
+const t = (iso: string) => (Date.parse(iso) / 1000 + IST_OFFSET) as UTCTimestamp;
+
+const C = { bull: "#22c55e", bear: "#f05252", muted: "#8494a7", line: "#1d2735", ema20: "#5aa9ff", ema50: "#f5a524", ema200: "#c084fc", bb: "#4d5b6d", vwap: "#2dd4bf" };
+
+interface Props {
+  candles: CandleData[];
+  series: Record<string, Point[]>;
+  oscillators: Record<string, Point[]>;
+  support?: number | null;
+  resistance?: number | null;
+  intraday: boolean;
+  showBands: boolean;
+  markers: SignalMarker[];
+  showMarkers: boolean;
+  scenario: Scenario | null;
+}
+
+export function PriceChart({ candles, series, oscillators, support, resistance, intraday, showBands, markers, showMarkers, scenario }: Props) {
+  const el = useRef<HTMLDivElement>(null);
+  const chart = useRef<IChartApi | null>(null);
+  const s = useRef<Record<string, ISeriesApi<"Candlestick" | "Histogram" | "Line">>>({});
+  const priceLines = useRef<IPriceLine[]>([]);
+  const markerApi = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
+
+  useEffect(() => {
+    if (!el.current) return;
+    const c = createChart(el.current, {
+      autoSize: true,
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: C.muted,
+        fontSize: 11,
+        panes: { separatorColor: C.line, separatorHoverColor: "#26364a" },
+      },
+      grid: { vertLines: { color: "#111925" }, horzLines: { color: "#111925" } },
+      rightPriceScale: { borderColor: C.line },
+      timeScale: { borderColor: C.line, timeVisible: true, secondsVisible: false },
+      crosshair: { mode: 0 },
+    });
+    const line = (color: string, pane = 0, width: 1 | 2 = 1) =>
+      c.addSeries(LineSeries, { color, lineWidth: width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, pane);
+
+    s.current.candles = c.addSeries(CandlestickSeries, {
+      upColor: C.bull, downColor: C.bear, borderVisible: false, wickUpColor: C.bull, wickDownColor: C.bear,
+    });
+    s.current.volume = c.addSeries(HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+    c.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    s.current.ema20 = line(C.ema20);
+    s.current.ema50 = line(C.ema50);
+    s.current.ema200 = line(C.ema200, 0, 2);
+    s.current.bb_upper = line(C.bb);
+    s.current.bb_lower = line(C.bb);
+    s.current.vwap = line(C.vwap);
+
+    s.current.rsi14 = line("#a78bfa", 1, 2);
+    s.current.rsi14.createPriceLine({ price: 70, color: C.bear, lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
+    s.current.rsi14.createPriceLine({ price: 30, color: C.bull, lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
+
+    s.current.macd_hist = c.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, 2);
+    s.current.macd = line(C.ema20, 2);
+    s.current.macd_signal = line(C.ema50, 2);
+
+    markerApi.current = createSeriesMarkers(s.current.candles as ISeriesApi<"Candlestick", UTCTimestamp>, []);
+
+    const panes = c.panes();
+    panes[0]?.setStretchFactor(3);
+    panes[1]?.setStretchFactor(1);
+    panes[2]?.setStretchFactor(1);
+    chart.current = c;
+    return () => {
+      c.remove();
+      chart.current = null;
+      s.current = {};
+      priceLines.current = [];
+      markerApi.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const ser = s.current;
+    if (!chart.current || !ser.candles) return;
+    ser.candles.setData(candles.map((k) => ({ time: t(k.time), open: k.open, high: k.high, low: k.low, close: k.close })));
+    ser.volume.setData(
+      candles.map((k) => ({ time: t(k.time), value: k.volume, color: k.close >= k.open ? "rgba(34,197,94,0.25)" : "rgba(240,82,82,0.25)" })),
+    );
+    const pts = (p?: Point[]) => (p ?? []).map((x) => ({ time: t(x.time), value: x.value }));
+    for (const k of ["ema20", "ema50", "ema200", "bb_upper", "bb_lower", "vwap"]) ser[k].setData(pts(series[k]));
+    ser.bb_upper.applyOptions({ visible: showBands });
+    ser.bb_lower.applyOptions({ visible: showBands });
+    ser.vwap.applyOptions({ visible: intraday });
+    ser.rsi14.setData(pts(oscillators.rsi14));
+    ser.macd.setData(pts(oscillators.macd));
+    ser.macd_signal.setData(pts(oscillators.macd_signal));
+    ser.macd_hist.setData(
+      (oscillators.macd_hist ?? []).map((x) => ({ time: t(x.time), value: x.value, color: x.value >= 0 ? "rgba(34,197,94,0.5)" : "rgba(240,82,82,0.5)" })),
+    );
+
+    const cs = ser.candles as ISeriesApi<"Candlestick">;
+    priceLines.current.forEach((pl) => cs.removePriceLine(pl));
+    priceLines.current = [];
+    if (support) priceLines.current.push(cs.createPriceLine({ price: support, color: C.bull, lineStyle: LineStyle.Dashed, lineWidth: 1, title: "S" }));
+    if (resistance) priceLines.current.push(cs.createPriceLine({ price: resistance, color: C.bear, lineStyle: LineStyle.Dashed, lineWidth: 1, title: "R" }));
+    if (scenario) {
+      const add = (price: number, color: string, title: string, style = LineStyle.Solid) =>
+        priceLines.current.push(cs.createPriceLine({ price, color, lineStyle: style, lineWidth: 1, title }));
+      const entry = scenario.direction === "long" ? "Buy zone" : "Sell zone";
+      add(scenario.entry_high, C.ema20, entry, LineStyle.Dotted);
+      add(scenario.entry_low, C.ema20, "", LineStyle.Dotted);
+      add(scenario.target, C.bull, "Target");
+      add(scenario.stop_loss, C.bear, "Stop");
+    }
+
+    markerApi.current?.setMarkers(
+      showMarkers
+        ? markers.map((m) => ({
+            time: t(m.time),
+            position: m.side === "buy" ? ("belowBar" as const) : ("aboveBar" as const),
+            shape: m.side === "buy" ? ("arrowUp" as const) : ("arrowDown" as const),
+            color: m.side === "buy" ? C.bull : C.bear,
+            text: m.side === "buy" ? "BUY" : "SELL",
+          }))
+        : [],
+    );
+  }, [candles, series, oscillators, support, resistance, intraday, showBands, markers, showMarkers, scenario]);
+
+  return <div ref={el} className="h-[560px] w-full" />;
+}
+
+export const CHART_LEGEND = [
+  { label: "EMA 20", color: C.ema20 },
+  { label: "EMA 50", color: C.ema50 },
+  { label: "EMA 200", color: C.ema200 },
+  { label: "VWAP (intraday)", color: C.vwap },
+  { label: "Bollinger 20,2", color: C.bb },
+  { label: "▲ BUY / ▼ SELL signal points", color: C.bull },
+  { label: "Buy/Sell zone · Target · Stop (current setup)", color: C.ema20 },
+];
