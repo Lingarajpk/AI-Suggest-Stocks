@@ -166,3 +166,36 @@ def test_signal_history_markers_and_stats():
     decided = [m for m in h["markers"] if m["outcome"]]
     assert h["buy"]["count"] + h["sell"]["count"] == len(decided)
     assert all(m["outcome"] is None for m in h["markers"] if m["time"] > df.index[-6].isoformat())
+
+
+def test_trade_exit_after_rise_then_fall():
+    from app.analysis.history import simulate_trades
+
+    # Flat, then a strong rise (BUY), then a sustained fall: the BUY must exit, not stay open.
+    closes = [100.0] * 80 + [100 + i * 0.8 for i in range(1, 30)] + [123 - i * 0.9 for i in range(1, 30)]
+    df = make_df(closes)
+    ind = ta.compute(df, intraday=False)
+    buy = pd.Series(False, index=df.index)
+    sell = pd.Series(False, index=df.index)
+    buy.iloc[85] = True
+    trades, open_trade = simulate_trades(df, ind, buy, sell)
+    assert len(trades) == 1 and open_trade is None
+    t = trades[0]
+    assert t["side"] == "buy" and t["exit_time"] > t["entry_time"]
+    assert t["reason"] in ("reversal", "target", "stop")
+    assert t["reason_text"]
+
+
+def test_open_trade_reports_weakening():
+    from app.analysis.history import simulate_trades
+
+    closes = [100.0] * 80 + [100 + i * 0.5 for i in range(1, 15)] + [106.5, 106.2]
+    df = make_df(closes)
+    ind = ta.compute(df, intraday=False)
+    buy = pd.Series(False, index=df.index)
+    buy.iloc[85] = True
+    _, ot = simulate_trades(df, ind, buy, pd.Series(False, index=df.index))
+    if ot is not None:  # may have hit its target already
+        assert ot["side"] == "buy" and ot["status"] in ("holding", "weakening")
+        if ot["status"] == "weakening":
+            assert ot["warnings"]

@@ -119,19 +119,38 @@ class DemoProvider(MarketDataProvider):
             )
         return out
 
-    async def candles(self, instrument: Instrument, timeframe: Timeframe) -> list[Candle]:
+    async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
         now = now_ist()
         bars = self._visible_15m(instrument)
         cutoff = now - timedelta(days=TIMEFRAMES[timeframe].lookback_days)
         bars = [c for c in bars if c.time >= cutoff]
-        if timeframe == "15m":
+        if timeframe == "1m":
+            out = [m for c in bars for m in _split_minutes(c, _seed(instrument.symbol)) if m.time <= now]
+        elif timeframe == "15m":
             out = bars
         elif timeframe == "1h":
             out = _resample(bars, lambda c: c.time.replace(
                 hour=9 + (c.time.hour * 60 + c.time.minute - 555) // 60, minute=15))
         else:
             out = _resample(bars, lambda c: datetime.combine(c.time.date(), time(0), tzinfo=IST))
-        return drop_incomplete(out, timeframe, now)
+        return out if include_partial else drop_incomplete(out, timeframe, now)
+
+
+def _split_minutes(bar: Candle, seed: int) -> list[Candle]:
+    """Deterministically split a demo 15-minute bar into 15 one-minute bars ending at its close."""
+    rng = np.random.default_rng(seed ^ int(bar.time.timestamp()))
+    path = bar.open + (bar.close - bar.open) * np.linspace(0, 1, 16)
+    path[1:-1] += rng.normal(0, (bar.high - bar.low) * 0.15 + 1e-9, 14)
+    path = np.clip(path, bar.low, bar.high)
+    vols = rng.dirichlet(np.ones(15)) * bar.volume
+    out = []
+    for i in range(15):
+        o, c = float(path[i]), float(path[i + 1])
+        out.append(Candle(
+            time=bar.time + timedelta(minutes=i), open=round(o, 2), close=round(c, 2),
+            high=round(max(o, c), 2), low=round(min(o, c), 2), volume=round(float(vols[i])),
+        ))
+    return out
 
 
 def _resample(bars: list[Candle], bucket) -> list[Candle]:

@@ -30,6 +30,7 @@ export async function fetcher<T>(url: string): Promise<T> {
 }
 
 export const TIMEFRAME_LABEL: Record<Timeframe, string> = {
+  "1m": "1-minute",
   "15m": "15-minute",
   "1h": "1-hour",
   "1d": "Daily",
@@ -48,7 +49,7 @@ export function useScanner(timeframe: Timeframe) {
 
 export function useStock(symbol: string, timeframe: Timeframe) {
   return useSWR<StockDetail, ApiError>(`/api/stocks/${encodeURIComponent(symbol)}?timeframe=${timeframe}`, fetcher, {
-    refreshInterval: timeframe === "1d" ? 300_000 : 60_000,
+    refreshInterval: timeframe === "1d" ? 300_000 : timeframe === "1m" ? 15_000 : 60_000,
     keepPreviousData: true,
   });
 }

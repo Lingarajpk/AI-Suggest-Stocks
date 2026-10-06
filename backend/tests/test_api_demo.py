@@ -66,8 +66,16 @@ def test_today_outlook(client):
 
 
 def test_alerts_and_movers_endpoints(client):
-    assert client.get("/api/alerts").json()["alerts"] == []
+    assert isinstance(client.get("/api/alerts").json()["alerts"], list)  # may be non-empty during market hours
     m = client.get("/api/movers").json()
     assert set(m) >= {"gainers", "losers", "fast"}
     assert all(r["change_pct"] > 0 for r in m["gainers"]) and all(r["change_pct"] < 0 for r in m["losers"])
     assert client.get("/api/health").json()["alerts"]["enabled"] is True
+
+
+def test_one_minute_chart_and_forming_candle(client):
+    d = client.get("/api/stocks/INFY?timeframe=1m").json()
+    assert d["timeframe"] == "1m" and len(d["candles"]) > 100
+    assert "forming_candle" in d
+    if d["forming_candle"]:
+        assert d["forming_candle"]["time"] > d["candles"][-1]["time"]

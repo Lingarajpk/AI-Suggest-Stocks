@@ -1,4 +1,4 @@
-export type Timeframe = "15m" | "1h" | "1d";
+export type Timeframe = "1m" | "15m" | "1h" | "1d";
 export type Freshness = "polled" | "stale" | "market_closed" | "unavailable" | "demo";
 export type SignalLabel = "Strong Bullish" | "Bullish" | "Neutral" | "Bearish" | "Strong Bearish";
 
@@ -135,6 +135,7 @@ export interface StockDetail extends Analysis {
   model_outlook: { status: string; message: string };
   news: { status: string; message: string };
   candles: CandleData[];
+  forming_candle?: CandleData | null;
   series: Record<string, Point[]>;
   oscillators: Record<string, Point[]>;
 }
@@ -174,6 +175,41 @@ export interface SignalHistory {
   period_end: string;
   notes: string;
   markers?: SignalMarker[];
+  trades?: { buy: TradeStats; sell: TradeStats; rules: string };
+  open_trade?: OpenTrade | null;
+  latest_exit?: ClosedTrade | null;
+  exits?: ClosedTrade[];
+}
+
+export interface TradeStats {
+  count: number;
+  wins: number;
+  win_rate: number | null;
+  avg_pnl_pct: number | null;
+  total_pnl_pct: number | null;
+}
+
+interface TradeBase {
+  side: "buy" | "sell";
+  entry_time: string;
+  entry_price: number;
+  stop: number;
+  target: number;
+  bars_held: number;
+  pnl_pct: number;
+}
+
+export interface ClosedTrade extends TradeBase {
+  exit_time: string;
+  exit_price: number;
+  reason: "stop" | "target" | "reversal" | "opposite";
+  reason_text: string;
+}
+
+export interface OpenTrade extends TradeBase {
+  last_close: number;
+  status: "holding" | "weakening";
+  warnings: string[];
 }
 
 export interface TrackRecord extends SideStats {

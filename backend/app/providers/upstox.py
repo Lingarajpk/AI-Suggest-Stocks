@@ -37,6 +37,7 @@ log = logging.getLogger(__name__)
 
 # timeframe -> (unit, interval, max days per request)
 UPSTOX_INTERVALS: dict[str, tuple[str, int, int]] = {
+    "1m": ("minutes", 1, 28),
     "15m": ("minutes", 15, 28),
     "1h": ("hours", 1, 85),
     "1d": ("days", 1, 3000),
@@ -245,7 +246,7 @@ class UpstoxProvider(MarketDataProvider):
         return out
 
     # ---- candles -----------------------------------------------------
-    async def candles(self, instrument: Instrument, timeframe: Timeframe) -> list[Candle]:
+    async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
         """History (cached for the day) merged with today's intraday candles (cached briefly)."""
         spec = TIMEFRAMES[timeframe]
         now = now_ist()
@@ -281,4 +282,5 @@ class UpstoxProvider(MarketDataProvider):
                 ttl = spec.cache_seconds if is_session_open(now) else 900
                 await self._cache.set(intra_key, [c.model_dump(mode="json") for c in today], ttl)
 
-        return drop_incomplete(merge_candles(history, today), timeframe, now)
+        merged = merge_candles(history, today)
+        return merged if include_partial else drop_incomplete(merged, timeframe, now)

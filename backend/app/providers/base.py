@@ -37,6 +37,7 @@ class TimeframeSpec:
 
 
 TIMEFRAMES: dict[str, TimeframeSpec] = {
+    "1m": TimeframeSpec(bar_minutes=1, lookback_days=5, cache_seconds=15),
     "15m": TimeframeSpec(bar_minutes=15, lookback_days=45, cache_seconds=60),
     "1h": TimeframeSpec(bar_minutes=60, lookback_days=120, cache_seconds=300),
     "1d": TimeframeSpec(bar_minutes=0, lookback_days=900, cache_seconds=1800),
@@ -71,8 +72,8 @@ class MarketDataProvider(ABC):
         """Quotes keyed by instrument_key. Missing keys mean no quote was returned."""
 
     @abstractmethod
-    async def candles(self, instrument: Instrument, timeframe: Timeframe) -> list[Candle]:
-        """Completed candles, oldest first."""
+    async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
+        """Candles oldest first. The still-forming last candle is included only if include_partial."""
 
     async def close(self) -> None:
         return None

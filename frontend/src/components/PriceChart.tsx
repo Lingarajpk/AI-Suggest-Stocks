@@ -15,7 +15,7 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
-import type { CandleData, Point, Scenario, SignalMarker } from "@/lib/types";
+import type { CandleData, ClosedTrade, Point, Scenario, SignalMarker } from "@/lib/types";
 
 const IST_OFFSET = 5.5 * 3600;
 // Lightweight Charts renders timestamps as UTC; shift so the axis reads in IST.
@@ -32,11 +32,14 @@ interface Props {
   intraday: boolean;
   showBands: boolean;
   markers: SignalMarker[];
+  exits: ClosedTrade[];
   showMarkers: boolean;
   scenario: Scenario | null;
+  /** Still-forming candle, redrawn on every live quote. */
+  liveBar: CandleData | null;
 }
 
-export function PriceChart({ candles, series, oscillators, support, resistance, intraday, showBands, markers, showMarkers, scenario }: Props) {
+export function PriceChart({ candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario, liveBar }: Props) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const s = useRef<Record<string, ISeriesApi<"Candlestick" | "Histogram" | "Line">>>({});
@@ -131,18 +134,32 @@ export function PriceChart({ candles, series, oscillators, support, resistance, 
       add(scenario.stop_loss, C.bear, "Stop");
     }
 
-    markerApi.current?.setMarkers(
-      showMarkers
-        ? markers.map((m) => ({
-            time: t(m.time),
-            position: m.side === "buy" ? ("belowBar" as const) : ("aboveBar" as const),
-            shape: m.side === "buy" ? ("arrowUp" as const) : ("arrowDown" as const),
-            color: m.side === "buy" ? C.bull : C.bear,
-            text: m.side === "buy" ? "BUY" : "SELL",
-          }))
-        : [],
-    );
-  }, [candles, series, oscillators, support, resistance, intraday, showBands, markers, showMarkers, scenario]);
+    const entryMarks = markers.map((m) => ({
+      time: t(m.time),
+      position: m.side === "buy" ? ("belowBar" as const) : ("aboveBar" as const),
+      shape: m.side === "buy" ? ("arrowUp" as const) : ("arrowDown" as const),
+      color: m.side === "buy" ? C.bull : C.bear,
+      text: m.side === "buy" ? "BUY" : "SELL",
+    }));
+    // Exit of a BUY = sell it (marked above the bar, pointing down); exit of a SELL = buy back.
+    const exitMarks = exits.map((x) => ({
+      time: t(x.exit_time),
+      position: x.side === "buy" ? ("aboveBar" as const) : ("belowBar" as const),
+      shape: x.side === "buy" ? ("arrowDown" as const) : ("arrowUp" as const),
+      color: C.ema50,
+      text: `${x.side === "buy" ? "EXIT" : "COVER"} ${x.pnl_pct > 0 ? "+" : ""}${x.pnl_pct.toFixed(1)}%`,
+    }));
+    markerApi.current?.setMarkers(showMarkers ? [...entryMarks, ...exitMarks].sort((a, b) => a.time - b.time) : []);
+  }, [candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario]);
+
+  // Runs after the data effect above, so the live candle sits on top of the latest setData.
+  useEffect(() => {
+    const ser = s.current;
+    if (!liveBar || !ser.candles) return;
+    const time = t(liveBar.time);
+    ser.candles.update({ time, open: liveBar.open, high: liveBar.high, low: liveBar.low, close: liveBar.close });
+    ser.volume.update({ time, value: liveBar.volume, color: liveBar.close >= liveBar.open ? "rgba(34,197,94,0.25)" : "rgba(240,82,82,0.25)" });
+  }, [liveBar, candles]);
 
   return <div ref={el} className="h-[560px] w-full" />;
 }
@@ -154,5 +171,6 @@ export const CHART_LEGEND = [
   { label: "VWAP (intraday)", color: C.vwap },
   { label: "Bollinger 20,2", color: C.bb },
   { label: "▲ BUY / ▼ SELL signal points", color: C.bull },
+  { label: "EXIT (sell the buy) / COVER (buy back the sell)", color: C.ema50 },
   { label: "Buy/Sell zone · Target · Stop (current setup)", color: C.ema20 },
 ];

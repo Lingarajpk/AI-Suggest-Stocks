@@ -10,7 +10,7 @@ from app.analysis.signals import evaluate
 from app.config import Settings
 from app.market_session import now_ist
 from app.models import Instrument, Quote, Timeframe
-from app.providers.base import MarketDataProvider, ProviderError
+from app.providers.base import MarketDataProvider, ProviderError, drop_incomplete
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +65,10 @@ class MarketService:
         return self._last_quotes.get(key)
 
     async def analyse(self, inst: Instrument, timeframe: Timeframe, with_series: bool) -> dict:
-        candles = await self.provider.candles(inst, timeframe)
+        all_candles = await self.provider.candles(inst, timeframe, include_partial=True)
+        # Signals use completed candles only; the forming one is returned separately for live charts.
+        candles = drop_incomplete(all_candles, timeframe, now_ist())
+        forming = all_candles[-1] if len(all_candles) > len(candles) else None
         df = ta.to_frame(candles)
         quote = self.cached_quote(inst.instrument_key)
         freshness = quote.freshness if quote else None
@@ -83,6 +86,7 @@ class MarketService:
         }
         if with_series:
             result["candles"] = [c.model_dump(mode="json") for c in candles]
+            result["forming_candle"] = forming.model_dump(mode="json") if forming else None
             result["series"] = {
                 name: [
                     {"time": t.isoformat(), "value": ta.clean(val)}

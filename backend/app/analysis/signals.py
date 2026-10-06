@@ -15,7 +15,7 @@ from app.models import Timeframe
 
 MIN_BARS = 60
 MIN_RISK_REWARD = 1.0
-MAX_HISTORY_AGE = {"15m": timedelta(days=4), "1h": timedelta(days=4), "1d": timedelta(days=6)}
+MAX_HISTORY_AGE = {"1m": timedelta(days=4), "15m": timedelta(days=4), "1h": timedelta(days=4), "1d": timedelta(days=6)}
 WEIGHTS = {"trend": 30, "macd": 20, "rsi": 20, "momentum": 15, "vwap": 15}
 
 

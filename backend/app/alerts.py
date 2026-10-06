@@ -147,6 +147,7 @@ class AlertEngine:
             if not a:
                 continue
             sig, hist = a["signal"], a.get("history") or {}
+            await self._check_trade(row, sig, hist, tf, now)
             m = hist.get("latest_marker")
             # Only a marker on the newest completed candle is "new"; older ones were already shown on the chart.
             if not m or m["time"] != sig.get("last_candle_time"):
@@ -170,6 +171,34 @@ class AlertEngine:
                 f"signal:{sym}:{tf}:{m['time']}", "up" if side == "buy" else "down",
                 f"{'▲ BUY' if side == 'buy' else '▼ SELL'} signal: {sym} ({tf})",
                 f"{sym} at ₹{m['price']:,.2f}, score {m['score']:+.0f}.{levels}{status} {record}", sym, q,
+            )
+
+    async def _check_trade(self, row: dict, sig: dict, hist: dict, tf: str, now: datetime) -> None:
+        """Exit and early-warning alerts for the trade opened by a BUY/SELL signal."""
+        sym = row["instrument"]["symbol"]
+        last_candle = sig.get("last_candle_time")
+        if not last_candle or now - datetime.fromisoformat(last_candle) > timedelta(hours=2):
+            return
+        q = self.service.cached_quote(row["instrument"]["instrument_key"])
+        ex = hist.get("latest_exit")
+        if ex and ex["exit_time"] == last_candle:
+            was_buy = ex["side"] == "buy"
+            await self._emit_once(
+                f"exit:{sym}:{tf}:{ex['entry_time']}", "down" if was_buy else "up",
+                f"{'⚠ EXIT BUY' if was_buy else '⚠ EXIT SELL'}: {sym} ({tf}) — {ex['reason_text']}",
+                f"{'Sell your buy' if was_buy else 'Buy back your sell'} from ₹{ex['entry_price']:,.2f}: {sym} is now "
+                f"₹{ex['exit_price']:,.2f}, {ex['reason_text']}. Result {ex['pnl_pct']:+.2f}% over {ex['bars_held']} candles.",
+                sym, q,
+            )
+        ot = hist.get("open_trade")
+        if ot and ot["status"] == "weakening":
+            was_buy = ot["side"] == "buy"
+            await self._emit_once(
+                f"weak:{sym}:{tf}:{ot['entry_time']}", "down" if was_buy else "up",
+                f"⚠ {sym} {'turning down after BUY' if was_buy else 'turning up after SELL'} ({tf})",
+                f"Open {ot['side'].upper()} from ₹{ot['entry_price']:,.2f} is {ot['pnl_pct']:+.2f}% now: "
+                f"{', '.join(ot['warnings'])}. Watch the stop at ₹{ot['stop']:,.2f}.",
+                sym, q,
             )
 
     # ---- emit --------------------------------------------------------

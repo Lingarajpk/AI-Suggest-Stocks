@@ -1,22 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ArrowLeft, BrainCircuit, Newspaper, ShieldAlert, Star } from "lucide-react";
 import { TIMEFRAME_LABEL, useHealth, useStock } from "@/lib/api";
 import { changeColor, fmtCompact, fmtNum, fmtPct, fmtPrice, fmtSigned, fmtTime } from "@/lib/format";
 import type { Timeframe } from "@/lib/types";
+import { buildLiveBar } from "@/lib/liveBar";
 import { useQuoteStream } from "@/lib/useQuoteStream";
 import { useWatchlist } from "@/lib/watchlist";
 import { AiExplanation } from "./AiExplanation";
 import { AppHeader } from "./AppHeader";
 import { TrackRecordPanel } from "./TrackRecord";
+import { TradeStatus } from "./TradeStatus";
 import { Disclaimer } from "./Disclaimer";
 import { CHART_LEGEND, PriceChart } from "./PriceChart";
 import { StatusNotices } from "./StatusNotices";
 import { FreshnessBadge, Panel, ScoreBar, SignalBadge, SkeletonRows } from "./ui";
 
-const TIMEFRAMES: Timeframe[] = ["1d", "1h", "15m"];
+const TIMEFRAMES: Timeframe[] = ["1d", "1h", "15m", "1m"];
 
 const INDICATOR_ROWS: [string, string, (v: number | null) => string][] = [
   ["EMA 9", "ema9", fmtPrice],
@@ -37,8 +39,8 @@ const INDICATOR_ROWS: [string, string, (v: number | null) => string][] = [
   ["ROC 10", "roc10", (v) => fmtPct(v)],
 ];
 
-export function StockView({ symbol }: { symbol: string }) {
-  const [timeframe, setTimeframe] = useState<Timeframe>("1d");
+export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string; initialTimeframe?: Timeframe }) {
+  const [timeframe, setTimeframe] = useState<Timeframe>(initialTimeframe);
   const [showBands, setShowBands] = useState(false);
   const [showMarkers, setShowMarkers] = useState(true);
   const health = useHealth();
@@ -49,6 +51,11 @@ export function StockView({ symbol }: { symbol: string }) {
   const quote = stream.quotes[symbol] ?? data?.quote ?? null;
   const sig = data?.signal;
   const snap = data?.snapshot ?? {};
+  const liveBar = useMemo(
+    // data.timeframe (not the selected tab) so a stale response never gets a mismatched live bar.
+    () => (data ? buildLiveBar(data.timeframe, data.forming_candle, data.candles.at(-1), quote) : null),
+    [data, quote],
+  );
 
   return (
     <>
@@ -149,8 +156,10 @@ export function StockView({ symbol }: { symbol: string }) {
                   intraday={timeframe !== "1d"}
                   showBands={showBands}
                   markers={data.history?.markers ?? []}
+                  exits={data.history?.exits ?? []}
                   showMarkers={showMarkers}
                   scenario={sig?.scenario ?? null}
+                  liveBar={liveBar}
                 />
                 <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
                   {CHART_LEGEND.map((l) => (
@@ -171,6 +180,8 @@ export function StockView({ symbol }: { symbol: string }) {
           </Panel>
 
           <div className="space-y-5">
+            {data?.history && <TradeStatus history={data.history} quote={quote} timeframe={data.timeframe} />}
+
             <Panel title="Why this signal?" action={sig && <ScoreBar score={sig.score} />}>
               {!sig ? (
                 <SkeletonRows rows={5} />
@@ -289,7 +300,7 @@ export function StockView({ symbol }: { symbol: string }) {
         {data && (
           <p className="text-xs text-faint">
             Source: {data.source === "demo" ? "synthetic demo generator" : "Upstox Developer API"} · generated {fmtTime(data.generated_at, true)} IST ·{" "}
-            {TIMEFRAME_LABEL[timeframe]} candles, forming candle excluded
+            {TIMEFRAME_LABEL[timeframe]} candles · current candle drawn live from quotes; signals use completed candles only
           </p>
         )}
       </main>

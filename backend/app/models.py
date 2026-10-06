@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-Timeframe = Literal["15m", "1h", "1d"]
+Timeframe = Literal["1m", "15m", "1h", "1d"]
 DataSource = Literal["upstox", "demo"]
 # polled: fetched from the REST quote API during market hours and recent enough
 # stale: market open but last trade older than STALE_AFTER_SECONDS
