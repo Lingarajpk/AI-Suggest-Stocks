@@ -19,6 +19,7 @@ from app.cache import create_cache
 from app.config import get_settings
 from app.market_session import is_session_open, now_ist, session_state
 from app.models import Timeframe
+from app.news import NewsService, NewsStore
 from app.providers.base import ProviderError
 from app.providers.demo import DemoProvider
 from app.providers.upstox import UpstoxAuth, UpstoxProvider
@@ -117,7 +118,26 @@ async def lifespan(app: FastAPI):
         engine.telegram = TelegramNotifier(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, http)
     app.state.alerts = engine
     engine.start()
+    news = NewsService(settings, http, service, NewsStore(settings.data_dir / "news.db"))
+    news.alerts = engine
+    app.state.news = news
+    news.start()
+
+    async def warm() -> None:
+        # Train the combined-outlook models and pattern stats up front so the first page view is fast.
+        for tf in ("5m", "15m", "1d"):
+            try:
+                await service.outlook_model(tf)
+                await service.pattern_stats(tf)
+                await service.strategy_stats(tf)
+            except Exception as exc:  # e.g. Upstox not logged in yet: trained on first request instead
+                log.info("warm-up for %s skipped: %s", tf, exc)
+
+    warmer = asyncio.create_task(warm())
     yield
+    warmer.cancel()
+    await news.stop()
+    news.store.close()
     await engine.stop()
     await app.state.hub.stop()
     await cache.close()
@@ -158,6 +178,8 @@ async def health(request: Request):
         "cache": request.app.state.cache.backend,
         "nvidia_configured": bool(settings.nvidia_api_key.get_secret_value()),
         "nvidia_model": settings.nvidia_model,
+        "news": {"enabled": settings.news_enabled, "source": "Google News (RSS)",
+                 "scored_by": "nvidia" if settings.nvidia_api_key.get_secret_value() else "keywords"},
         "session": session_state(),
         "server_time": now_ist().isoformat(),
         "quote_poll_seconds": settings.quote_poll_seconds,
@@ -242,6 +264,39 @@ async def scanner(request: Request, timeframe: Timeframe = Query("1d")):
     return await svc(request).scan(timeframe)
 
 
+@app.get("/api/patterns/stats")
+async def pattern_stats(request: Request, timeframe: Timeframe = Query("1d")):
+    """Per-pattern success rates measured across the whole universe (cached 30 minutes)."""
+    return await svc(request).pattern_stats(timeframe)
+
+
+@app.get("/api/intraday")
+async def intraday(request: Request, stocks: bool = Query(True)):
+    """Intraday desk: NIFTY 50 / BANK NIFTY / SENSEX 5-minute BUY/SELL (confirmed by 15-minute), then stocks."""
+    return await svc(request).intraday(include_stocks=stocks)
+
+
+@app.get("/api/strategies/stats")
+async def strategy_stats(request: Request, timeframe: Timeframe = Query("1d")):
+    """Each strategy's and candlestick's hit rate vs. random, pooled across the universe (cached 30 minutes)."""
+    return await svc(request).strategy_stats(timeframe)
+
+
+@app.get("/api/news")
+async def news_feed(request: Request, limit: int = Query(30, ge=1, le=100)):
+    """Latest headlines across the universe, newest first."""
+    return request.app.state.news.feed(limit)
+
+
+@app.get("/api/news/{symbol}")
+async def stock_news(request: Request, symbol: str):
+    """Live headlines for one stock, their sentiment, and the news-adjusted up/down probability."""
+    inst = await svc(request).instrument(symbol)
+    if inst is None:
+        raise HTTPException(404, f"{symbol.upper()} is not in the configured universe")
+    return await request.app.state.news.snapshot(inst)
+
+
 @app.get("/api/alerts")
 async def alerts(request: Request, limit: int = Query(50, ge=1, le=200)):
     return {"alerts": request.app.state.alerts.recent(limit), "session": session_state()}
@@ -289,17 +344,14 @@ async def _stock_detail(request: Request, symbol: str, timeframe: Timeframe) -> 
         await service.refresh_quotes()
     q = service.cached_quote(inst.instrument_key)
     analysis = await service.analyse(inst, timeframe, with_series=True)
+    outlook = analysis.pop("outlook", None) or {"status": "not_available", "message": "No candle data."}
     return {
         "instrument": inst.model_dump(),
         "timeframe": timeframe,
         "source": service.provider.name,
         "quote": q.model_dump(mode="json") if q else None,
         "generated_at": now_ist().isoformat(),
-        "model_outlook": {
-            "status": "not_available",
-            "message": "Horizon-specific ML probabilities are not built yet; they will be shown only after out-of-sample validation.",
-        },
-        "news": {"status": "not_configured", "message": "No licensed news source is configured."},
+        "model_outlook": outlook,
         **analysis,
     }
 

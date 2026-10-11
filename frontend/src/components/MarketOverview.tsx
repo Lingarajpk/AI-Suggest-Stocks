@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { changeColor, fmtPct, fmtPrice, fmtSigned } from "@/lib/format";
 import type { Quote, ScanResult } from "@/lib/types";
@@ -21,7 +22,9 @@ export function IndexStrip({ quotes }: { quotes: Record<string, Quote> }) {
             className="rounded-xl border border-line bg-panel px-4 py-3"
           >
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium tracking-wider text-muted">{name}</span>
+              <Link href={`/stock/${name.replace(/\s+/g, "")}?tf=5m`} className="text-xs font-medium tracking-wider text-muted hover:text-accent">
+                {name} →
+              </Link>
               <FreshnessBadge freshness={q?.freshness ?? "unavailable"} />
             </div>
             {q ? (

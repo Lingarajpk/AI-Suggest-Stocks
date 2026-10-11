@@ -199,3 +199,15 @@ def test_open_trade_reports_weakening():
         assert ot["side"] == "buy" and ot["status"] in ("holding", "weakening")
         if ot["status"] == "weakening":
             assert ot["warnings"]
+
+
+def test_trade_stop_gap_fills_at_open():
+    from app.analysis.history import simulate_trades
+
+    t0 = datetime(2025, 1, 1, tzinfo=IST)
+    rows = [(100, 101, 99, 100), (100, 101, 99, 100), (90, 91, 89, 90)]  # bar 2 gaps far below the stop
+    df = ta.to_frame([Candle(time=t0 + timedelta(days=i), open=o, high=h, low=l, close=c, volume=1) for i, (o, h, l, c) in enumerate(rows)])
+    ind = pd.DataFrame({"ema20": [99.0] * 3, "macd_hist": [1.0] * 3, "atr14": [2.0] * 3}, index=df.index)
+    buy = pd.Series([True, False, False], index=df.index)
+    trades, _ = simulate_trades(df, ind, buy, pd.Series(False, index=df.index))
+    assert trades[0]["reason"] == "stop" and trades[0]["exit_price"] == 90.0  # open, not the 97 stop

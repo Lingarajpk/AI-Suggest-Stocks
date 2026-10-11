@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { ArrowLeft, BrainCircuit, Newspaper, ShieldAlert, Star } from "lucide-react";
+import { ArrowLeft, ShieldAlert, Star } from "lucide-react";
 import { TIMEFRAME_LABEL, useHealth, useStock } from "@/lib/api";
 import { changeColor, fmtCompact, fmtNum, fmtPct, fmtPrice, fmtSigned, fmtTime } from "@/lib/format";
 import type { Timeframe } from "@/lib/types";
@@ -11,6 +11,10 @@ import { useQuoteStream } from "@/lib/useQuoteStream";
 import { useWatchlist } from "@/lib/watchlist";
 import { AiExplanation } from "./AiExplanation";
 import { AppHeader } from "./AppHeader";
+import { NewsSidebar } from "./NewsPanel";
+import { OutlookCard, OutlookReliability } from "./OutlookCard";
+import { PatternStatsTable, PatternsPanel } from "./PatternsPanel";
+import { StrategiesPanel, StrategyStatsTable } from "./StrategiesPanel";
 import { TrackRecordPanel } from "./TrackRecord";
 import { TradeStatus } from "./TradeStatus";
 import { Disclaimer } from "./Disclaimer";
@@ -18,7 +22,7 @@ import { CHART_LEGEND, PriceChart } from "./PriceChart";
 import { StatusNotices } from "./StatusNotices";
 import { FreshnessBadge, Panel, ScoreBar, SignalBadge, SkeletonRows } from "./ui";
 
-const TIMEFRAMES: Timeframe[] = ["1d", "1h", "15m", "1m"];
+const TIMEFRAMES: Timeframe[] = ["1d", "1h", "15m", "5m", "1m"];
 
 const INDICATOR_ROWS: [string, string, (v: number | null) => string][] = [
   ["EMA 9", "ema9", fmtPrice],
@@ -43,12 +47,17 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
   const [timeframe, setTimeframe] = useState<Timeframe>(initialTimeframe);
   const [showBands, setShowBands] = useState(false);
   const [showMarkers, setShowMarkers] = useState(true);
+  const [showPatterns, setShowPatterns] = useState(true);
+  const [showStrategies, setShowStrategies] = useState(true);
+  const [showSupertrend, setShowSupertrend] = useState(false);
+  const [showVwapBands, setShowVwapBands] = useState(false);
   const health = useHealth();
   const stream = useQuoteStream();
   const { data, error, isLoading } = useStock(symbol, timeframe);
   const watch = useWatchlist();
 
-  const quote = stream.quotes[symbol] ?? data?.quote ?? null;
+  // Indices are routed as NIFTY50 / BANKNIFTY but quoted as "NIFTY 50" / "BANK NIFTY".
+  const quote = stream.quotes[data?.instrument.symbol ?? symbol] ?? data?.quote ?? null;
   const sig = data?.signal;
   const snap = data?.snapshot ?? {};
   const liveBar = useMemo(
@@ -63,13 +72,13 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
       <main className="mx-auto w-full min-w-0 max-w-[1400px] space-y-5 px-4 py-5 sm:px-6">
         <StatusNotices health={health.data} healthError={health.error} streamError={stream.error} />
         <Link href="/" className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink">
-          <ArrowLeft className="size-3.5" /> Dashboard
+          <ArrowLeft className="size-3.5" /> Intraday desk
         </Link>
 
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-tight">{symbol}</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">{data?.instrument.symbol ?? symbol}</h1>
               <button onClick={() => watch.toggle(symbol)} aria-label="Toggle watchlist" className="text-faint hover:text-warn">
                 <Star className={`size-5 ${watch.has(symbol) ? "fill-warn text-warn" : ""}`} />
               </button>
@@ -115,6 +124,8 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
           </div>
         )}
 
+        {data && <OutlookCard outlook={data.model_outlook} timeframe={data.timeframe} />}
+
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
           <Panel
             title={
@@ -131,15 +142,22 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
               </div>
             }
             action={
-              <div className="flex items-center gap-4">
-                <label className="flex items-center gap-1.5 text-xs text-muted">
-                  <input type="checkbox" checked={showMarkers} onChange={(e) => setShowMarkers(e.target.checked)} className="accent-accent" />
-                  Buy/sell signals
-                </label>
-                <label className="flex items-center gap-1.5 text-xs text-muted">
-                  <input type="checkbox" checked={showBands} onChange={(e) => setShowBands(e.target.checked)} className="accent-accent" />
-                  Bollinger bands
-                </label>
+              <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+                {(
+                  [
+                    ["Buy/sell signals", showMarkers, setShowMarkers],
+                    ["Chart patterns", showPatterns, setShowPatterns],
+                    ["Strategies & candles", showStrategies, setShowStrategies],
+                    ["Supertrend", showSupertrend, setShowSupertrend],
+                    ["Bollinger bands", showBands, setShowBands],
+                    ...(timeframe !== "1d" ? ([["VWAP bands", showVwapBands, setShowVwapBands]] as const) : []),
+                  ] as const
+                ).map(([label, on, set]) => (
+                  <label key={label} className="flex items-center gap-1.5 text-xs text-muted">
+                    <input type="checkbox" checked={on} onChange={(e) => set(e.target.checked)} className="accent-accent" />
+                    {label}
+                  </label>
+                ))}
               </div>
             }
           >
@@ -153,12 +171,19 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
                   oscillators={data.oscillators}
                   support={sig?.levels.support}
                   resistance={sig?.levels.resistance}
-                  intraday={timeframe !== "1d"}
+                  intraday={data.timeframe !== "1d"}
                   showBands={showBands}
                   markers={data.history?.markers ?? []}
                   exits={data.history?.exits ?? []}
                   showMarkers={showMarkers}
                   scenario={sig?.scenario ?? null}
+                  patterns={data.patterns?.current ?? []}
+                  recentPatterns={data.patterns?.recent ?? []}
+                  showPatterns={showPatterns}
+                  strategies={data.strategies}
+                  showStrategies={showStrategies}
+                  showSupertrend={showSupertrend}
+                  showVwapBands={showVwapBands}
                   liveBar={liveBar}
                 />
                 <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
@@ -180,7 +205,13 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
           </Panel>
 
           <div className="space-y-5">
+            <NewsSidebar symbol={symbol} />
+
             {data?.history && <TradeStatus history={data.history} quote={quote} timeframe={data.timeframe} />}
+
+            {data && <PatternsPanel block={data.patterns} timeframe={data.timeframe} quote={quote} source={data.source} />}
+
+            {data && <StrategiesPanel block={data.strategies} timeframe={data.timeframe} />}
 
             <Panel title="Why this signal?" action={sig && <ScoreBar score={sig.score} />}>
               {!sig ? (
@@ -220,7 +251,7 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
               )}
             </Panel>
 
-            {data?.history && <TrackRecordPanel history={data.history} timeframe={timeframe} />}
+            {data?.history && <TrackRecordPanel history={data.history} timeframe={data.timeframe} />}
 
             <Panel title="Scenario levels">
               {sig?.scenario ? (
@@ -271,8 +302,8 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
           <AiExplanation key={`${symbol}-${timeframe}`} symbol={symbol} timeframe={timeframe} enabled={!!health.data?.nvidia_configured} />
         )}
 
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-          <Panel title="Indicators" className="lg:col-span-1">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <Panel title="Indicators">
             <dl className="grid grid-cols-2 gap-y-1 text-xs">
               {INDICATOR_ROWS.map(([label, key, f]) => (
                 <div key={key} className="contents">
@@ -282,20 +313,12 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
               ))}
             </dl>
           </Panel>
-          <Panel title={<span className="inline-flex items-center gap-2"><BrainCircuit className="size-4 text-accent" /> Model outlook</span>}>
-            <p className="text-sm text-muted">{data?.model_outlook.message ?? "…"}</p>
-            <p className="mt-2 text-xs text-faint">
-              Planned: LightGBM/XGBoost models per horizon (15m, 1h, EOD, next day, 5 days) with calibrated probabilities, walk-forward backtests and published
-              hit-rates.
-            </p>
-          </Panel>
-          <Panel title={<span className="inline-flex items-center gap-2"><Newspaper className="size-4 text-accent" /> News sentiment</span>}>
-            <p className="text-sm text-muted">{data?.news.message ?? "…"}</p>
-            <p className="mt-2 text-xs text-faint">
-              Upstox market data does not include news. A licensed news feed plus NVIDIA NIM summaries (with original source links) are planned.
-            </p>
-          </Panel>
+          <OutlookReliability outlook={data?.model_outlook} />
         </div>
+
+        {data && <PatternStatsTable timeframe={data.timeframe} />}
+
+        {data && <StrategyStatsTable timeframe={data.timeframe} />}
 
         {data && (
           <p className="text-xs text-faint">

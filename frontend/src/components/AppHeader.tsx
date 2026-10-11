@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Activity, AlertTriangle, PlugZap, Radio } from "lucide-react";
 import type { ApiError } from "@/lib/api";
 import { fmtTime } from "@/lib/format";
@@ -29,6 +30,7 @@ export function AppHeader({
   alerts: Alert[];
   latestAlert: Alert | null;
 }) {
+  const pathname = usePathname();
   return (
     <>
       <AlertToast alert={latestAlert} />
@@ -39,10 +41,24 @@ export function AppHeader({
               <Activity className="size-4" />
             </span>
             <span className="font-semibold tracking-tight">AI Stock</span>
-            <span className="hidden text-xs text-muted sm:inline">
+            <span className="hidden text-xs text-muted lg:inline">
               Market Intelligence · NSE/BSE
             </span>
           </Link>
+          <nav className="flex rounded-lg border border-line bg-panel-2 p-0.5 text-xs font-medium">
+            {[
+              ["/", "Intraday"],
+              ["/dashboard", "Dashboard"],
+            ].map(([href, label]) => (
+              <Link
+                key={href}
+                href={href}
+                className={`rounded-md px-3 py-1 ${pathname === href ? "bg-accent/15 text-accent" : "text-muted hover:text-ink"}`}
+              >
+                {label}
+              </Link>
+            ))}
+          </nav>
           <div className="flex flex-wrap items-center gap-2 text-xs">
             {healthError ? (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-bear/10 px-3 py-1 text-bear ring-1 ring-bear/30">

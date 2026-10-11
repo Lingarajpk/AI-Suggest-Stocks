@@ -81,7 +81,12 @@ export function useQuoteStream(): StreamState {
     fetch("/api/alerts?limit=50", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
-        if (body && !closed) setAlerts((list) => (list.length ? list : body.alerts));
+        if (!body || closed) return;
+        // Merge with anything that arrived live first, newest first, without duplicates.
+        setAlerts((list) => {
+          const ids = new Set(list.map((a) => a.id));
+          return [...list, ...(body.alerts as Alert[]).filter((a) => !ids.has(a.id))].sort((a, b) => b.id - a.id).slice(0, 100);
+        });
       })
       .catch(() => {});
 

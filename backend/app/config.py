@@ -45,10 +45,17 @@ class Settings(BaseSettings):
     alert_fast_move_pct: float = 1.0  # move within the window below
     alert_fast_window_minutes: int = 15
     alert_cooldown_minutes: int = 30
-    alert_signal_timeframe: Literal["15m", "1h", "1d"] = "15m"
+    alert_signal_timeframe: Literal["5m", "15m", "1h", "1d"] = "15m"
     # Optional: also send alerts to Telegram (create a bot with @BotFather).
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_chat_id: str = ""
+
+    # Live news (Google News RSS), scored by the NVIDIA model with a keyword fallback.
+    news_enabled: bool = True
+    news_poll_minutes: float = 5.0
+    news_lookback_hours: int = 48
+    # Cap on how far news can move the technical up-probability, in percentage points.
+    news_max_shift_pts: float = 10.0
 
     # Optional. When empty an in-process TTL cache is used.
     redis_url: str = ""

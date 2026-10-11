@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { StockView } from "@/components/StockView";
 import type { Timeframe } from "@/lib/types";
 
-const TIMEFRAMES: Timeframe[] = ["1m", "15m", "1h", "1d"];
+const TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "1h", "1d"];
 
 export async function generateMetadata({ params }: PageProps<"/stock/[symbol]">): Promise<Metadata> {
   const { symbol } = await params;

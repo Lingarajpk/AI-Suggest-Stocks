@@ -38,6 +38,7 @@ class TimeframeSpec:
 
 TIMEFRAMES: dict[str, TimeframeSpec] = {
     "1m": TimeframeSpec(bar_minutes=1, lookback_days=5, cache_seconds=15),
+    "5m": TimeframeSpec(bar_minutes=5, lookback_days=20, cache_seconds=30),
     "15m": TimeframeSpec(bar_minutes=15, lookback_days=45, cache_seconds=60),
     "1h": TimeframeSpec(bar_minutes=60, lookback_days=120, cache_seconds=300),
     "1d": TimeframeSpec(bar_minutes=0, lookback_days=900, cache_seconds=1800),

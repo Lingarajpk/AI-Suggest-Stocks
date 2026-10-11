@@ -18,11 +18,25 @@ from app.models import Timeframe
 
 THRESHOLD = 20
 # Forward horizon in bars used to judge each signal point.
-HORIZON = {"1m": (15, "15 minutes"), "1d": (5, "5 trading days"), "1h": (7, "about 1 trading day"), "15m": (8, "2 hours")}
+HORIZON = {"1m": (15, "15 minutes"), "5m": (12, "1 hour"), "1d": (5, "5 trading days"), "1h": (7, "about 1 trading day"), "15m": (8, "2 hours")}
 
 
 def score_series(df: pd.DataFrame, ind: pd.DataFrame) -> pd.Series:
     """Vectorised version of signals.evaluate's score for every bar."""
+    comps = score_components(df, ind)
+    num = pd.Series(0.0, index=df.index)
+    den = pd.Series(0.0, index=df.index)
+    for name, s in comps.items():
+        ok = s.notna()
+        num += s.fillna(0) * WEIGHTS[name]
+        den += ok * WEIGHTS[name]
+    score = (100 * num / den).where(den > 0)
+    score = score.where(~(ind["adx14"] < 20), score * 0.6)
+    return score.round(1)
+
+
+def score_components(df: pd.DataFrame, ind: pd.DataFrame) -> dict[str, pd.Series]:
+    """Each factor of the rule-based score, in [-1, 1], for every bar."""
     close = df["close"]
     trend = pd.concat(
         [np.sign(close - ind["ema20"]), np.sign(ind["ema20"] - ind["ema50"]), np.sign(ind["ema50"] - ind["ema200"])],
@@ -39,16 +53,7 @@ def score_series(df: pd.DataFrame, ind: pd.DataFrame) -> pd.Series:
     mom = (ind["roc10"] / (atr_pct * math.sqrt(10))).clip(-1, 1).where(atr > 0)
     vwap = ((close - ind["vwap"]) / atr).clip(-1, 1).where(atr > 0)
 
-    comps = {"trend": trend, "macd": macd, "rsi": rsi_c, "momentum": mom, "vwap": vwap}
-    num = pd.Series(0.0, index=df.index)
-    den = pd.Series(0.0, index=df.index)
-    for name, s in comps.items():
-        ok = s.notna()
-        num += s.fillna(0) * WEIGHTS[name]
-        den += ok * WEIGHTS[name]
-    score = (100 * num / den).where(den > 0)
-    score = score.where(~(ind["adx14"] < 20), score * 0.6)
-    return score.round(1)
+    return {"trend": trend, "macd": macd, "rsi": rsi_c, "momentum": mom, "vwap": vwap}
 
 
 EXIT_TEXT = {
@@ -63,12 +68,12 @@ def simulate_trades(df: pd.DataFrame, ind: pd.DataFrame, buy: pd.Series, sell: p
     """Follow each BUY/SELL signal until it exits; return (closed trades, open trade or None).
 
     Entry at the signal candle's close. From the next candle on, the first rule that applies exits:
-      stop    - price touches entry -/+ 1.5 x ATR (filled at the stop)
-      target  - price touches entry +/- 2.5 x ATR (filled at the target)
+      stop    - price touches entry -/+ 1.5 x ATR (filled at the stop, or the open if it gaps through)
+      target  - price touches entry +/- 2.5 x ATR (filled at the target, or the open if it gaps through)
       reversal- close back through EMA20 with the MACD histogram on the other side of zero
       opposite- the opposite signal fires (exit, then the new trade opens on the same close)
     """
-    o_close, o_high, o_low = df["close"].to_numpy(), df["high"].to_numpy(), df["low"].to_numpy()
+    o_open, o_close, o_high, o_low = df["open"].to_numpy(), df["close"].to_numpy(), df["high"].to_numpy(), df["low"].to_numpy()
     ema20, hist, atr = ind["ema20"].to_numpy(), ind["macd_hist"].to_numpy(), ind["atr14"].to_numpy()
     b, s_ = buy.to_numpy(), sell.to_numpy()
     idx = df.index
@@ -90,14 +95,15 @@ def simulate_trades(df: pd.DataFrame, ind: pd.DataFrame, buy: pd.Series, sell: p
     for i in range(len(df)):
         if pos is not None and i > pos["i"]:
             long = pos["side"] == "buy"
+            # A bar that opens beyond the stop/target fills at its open (gap), not at the level.
             if long and o_low[i] <= pos["stop"]:
-                close_pos(i, pos["stop"], "stop"); pos = None
+                close_pos(i, min(pos["stop"], o_open[i]), "stop"); pos = None
             elif not long and o_high[i] >= pos["stop"]:
-                close_pos(i, pos["stop"], "stop"); pos = None
+                close_pos(i, max(pos["stop"], o_open[i]), "stop"); pos = None
             elif long and o_high[i] >= pos["target"]:
-                close_pos(i, pos["target"], "target"); pos = None
+                close_pos(i, max(pos["target"], o_open[i]), "target"); pos = None
             elif not long and o_low[i] <= pos["target"]:
-                close_pos(i, pos["target"], "target"); pos = None
+                close_pos(i, min(pos["target"], o_open[i]), "target"); pos = None
             elif long and o_close[i] < ema20[i] and hist[i] < 0:
                 close_pos(i, o_close[i], "reversal"); pos = None
             elif not long and o_close[i] > ema20[i] and hist[i] > 0:

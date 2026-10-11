@@ -38,6 +38,7 @@ log = logging.getLogger(__name__)
 # timeframe -> (unit, interval, max days per request)
 UPSTOX_INTERVALS: dict[str, tuple[str, int, int]] = {
     "1m": ("minutes", 1, 28),
+    "5m": ("minutes", 5, 28),
     "15m": ("minutes", 15, 28),
     "1h": ("hours", 1, 85),
     "1d": ("days", 1, 3000),
@@ -270,15 +271,22 @@ class UpstoxProvider(MarketDataProvider):
             await self._cache.set(hist_key, [c.model_dump(mode="json") for c in history], 6 * 3600)
 
         today: list[Candle] = []
-        # Today's bars come from the intraday endpoint, during and after the session.
-        if spec.bar_minutes and is_trading_weekday(now.date()) and now.time() >= SESSION_OPEN:
-            intra_key = f"candles:upstox:intra:{instrument.instrument_key}:{timeframe}"
+        # Today's bars (including today's daily candle) come from the intraday endpoint, during and
+        # after the session; the historical endpoint only covers completed days.
+        if is_trading_weekday(now.date()) and now.time() >= SESSION_OPEN:
+            intra_key = f"candles:upstox:intra:{instrument.instrument_key}:{timeframe}:{now.date()}"
             cached = await self._cache.get(intra_key)
             if cached is not None:
                 today = [Candle.model_validate(c) for c in cached]
             else:
-                data = await self._get(f"/v3/historical-candle/intraday/{key}/{unit}/{interval}")
-                today = parse_candles(data.get("candles", []))
+                try:
+                    data = await self._get(f"/v3/historical-candle/intraday/{key}/{unit}/{interval}")
+                    today = parse_candles(data.get("candles", []))
+                except ProviderError as exc:
+                    if exc.http_status == 401 or spec.bar_minutes:
+                        raise
+                    # Daily view still works from history if today's daily candle isn't available.
+                    log.warning("intraday daily candle unavailable for %s: %s", instrument.symbol, exc.message)
                 ttl = spec.cache_seconds if is_session_open(now) else 900
                 await self._cache.set(intra_key, [c.model_dump(mode="json") for c in today], ttl)
 

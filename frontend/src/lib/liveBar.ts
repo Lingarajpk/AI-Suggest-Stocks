@@ -1,7 +1,7 @@
 import type { CandleData, Quote, Timeframe } from "./types";
 
 const IST_MS = 5.5 * 3600 * 1000;
-const BAR_MINUTES: Record<Timeframe, number> = { "1m": 1, "15m": 15, "1h": 60, "1d": 0 };
+const BAR_MINUTES: Record<Timeframe, number> = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "1d": 0 };
 const SESSION_OPEN_MIN = 9 * 60 + 15;
 
 /** Start of the bar containing `ms`, as an ISO string (bars are aligned to the 09:15 IST open). */

@@ -12,13 +12,15 @@ import { AppHeader } from "./AppHeader";
 import { Disclaimer } from "./Disclaimer";
 import { IndexStrip, SectorStrength, StatTiles } from "./MarketOverview";
 import { LiveMovers } from "./LiveMovers";
+import { ActivePatterns } from "./PatternsPanel";
+import { MarketNews } from "./NewsPanel";
 import { ScannerTable } from "./ScannerTable";
 import { SignalCard } from "./SignalCard";
 import { StatusNotices } from "./StatusNotices";
 import { TodayOutlook } from "./TodayOutlook";
 import { Panel, SkeletonRows } from "./ui";
 
-const TIMEFRAMES: Timeframe[] = ["1d", "1h", "15m"];
+const TIMEFRAMES: Timeframe[] = ["1d", "1h", "15m", "5m"];
 
 export function Dashboard() {
   const [timeframe, setTimeframe] = useState<Timeframe>("1d");
@@ -109,6 +111,8 @@ export function Dashboard() {
           </Panel>
           <div className="space-y-5">
             <SectorStrength scan={scan.data} />
+            <ActivePatterns rows={scan.data?.rows ?? []} timeframe={timeframe} />
+            <MarketNews />
             <Panel title="Watchlist" action={<span className="text-xs text-faint">stored in this browser</span>}>
               {watch.list.length ? (
                 <ul className="space-y-1.5 text-sm">
