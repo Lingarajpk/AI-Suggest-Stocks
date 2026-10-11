@@ -15,6 +15,7 @@ from app.providers.base import DASHBOARD_INDICES, TIMEFRAMES, MarketDataProvider
 from app.sectors import SECTORS
 
 HISTORY_START = date(2023, 1, 2)
+HORIZON_DAYS = 365 * 8  # fixed generation horizon so past bars never change from one day to the next
 BARS_PER_DAY = 25  # 09:15-15:30 in 15-minute bars
 INDEX_BASE = {"NIFTY 50": 20000.0, "BANK NIFTY": 45000.0, "SENSEX": 66000.0}
 
@@ -28,6 +29,7 @@ class DemoProvider(MarketDataProvider):
 
     def __init__(self) -> None:
         self._series: dict[str, tuple[date, list[Candle]]] = {}
+        self._five: dict[str, tuple[datetime, list[Candle]]] = {}
 
     async def resolve_equities(self, symbols: list[str]) -> tuple[list[Instrument], list[str]]:
         return [
@@ -57,24 +59,29 @@ class DemoProvider(MarketDataProvider):
         if cached and cached[0] == today:
             return cached[1]
 
-        rng = np.random.default_rng(_seed(inst.symbol))
-        days = [HISTORY_START + timedelta(days=i) for i in range((today - HISTORY_START).days + 1)]
-        days = [d for d in days if d.weekday() < 5]
-        n = len(days) * BARS_PER_DAY
+        seed = _seed(inst.symbol)
+        # One independent stream per component, each drawn over a fixed horizon and then sliced,
+        # so a bar's values never change as new days are added.
+        rng = lambda k: np.random.default_rng([seed, k])  # noqa: E731
+        all_days = [HISTORY_START + timedelta(days=i) for i in range(HORIZON_DAYS)]
+        all_days = [d for d in all_days if d.weekday() < 5]
+        days = [d for d in all_days if d <= today]
+        total, n = len(all_days) * BARS_PER_DAY, len(days) * BARS_PER_DAY
 
-        price0 = INDEX_BASE.get(inst.symbol) or float(rng.uniform(150, 4000))
-        vol = 0.0022 if inst.kind == "index" else float(rng.uniform(0.003, 0.0055))
+        params = rng(0)
+        price0 = INDEX_BASE.get(inst.symbol) or float(params.uniform(150, 4000))
+        vol = 0.0022 if inst.kind == "index" else float(params.uniform(0.003, 0.0055))
         # Drift regimes of ~40 trading days so the demo shows a mix of trends.
-        regimes = rng.normal(0, 0.0004, size=n // (40 * BARS_PER_DAY) + 1)
+        regimes = rng(1).normal(0, 0.0004, size=total // (40 * BARS_PER_DAY) + 1)
         drift = np.repeat(regimes, 40 * BARS_PER_DAY)[:n]
-        rets = drift + rng.normal(0, vol, size=n)
+        rets = drift + rng(2).normal(0, vol, size=total)[:n]
         closes = price0 * np.exp(np.cumsum(rets))
         opens = np.concatenate([[price0], closes[:-1]])
-        wick = np.abs(rng.normal(0, vol * 0.6, size=n))
+        wick = np.abs(rng(3).normal(0, vol * 0.6, size=total)[:n])
         highs = np.maximum(opens, closes) * (1 + wick)
         lows = np.minimum(opens, closes) * (1 - wick)
         u_shape = np.tile(1.6 - np.sin(np.linspace(0, np.pi, BARS_PER_DAY)), len(days))
-        volumes = rng.lognormal(11, 0.4, size=n) * u_shape * (0 if inst.kind == "index" else 1)
+        volumes = rng(4).lognormal(11, 0.4, size=total)[:n] * u_shape * (0 if inst.kind == "index" else 1)
 
         candles = []
         i = 0
@@ -97,17 +104,26 @@ class DemoProvider(MarketDataProvider):
         now = now_ist()
         return [c for c in self._base_15m(inst) if c.time <= now]
 
+    def _live_15m(self, inst: Instrument) -> list[Candle]:
+        """Like _visible_15m, but the still-forming bar only contains the minutes that have happened."""
+        now = now_ist()
+        bars = self._visible_15m(inst)
+        if bars and bars[-1].time + timedelta(minutes=15) > now:
+            mins = [m for m in _split_minutes(bars[-1], _seed(inst.symbol)) if m.time <= now]
+            if mins:
+                bars[-1] = Candle(time=bars[-1].time, open=mins[0].open, high=max(m.high for m in mins),
+                                  low=min(m.low for m in mins), close=mins[-1].close, volume=sum(m.volume for m in mins))
+        return bars
+
     async def quotes(self, instruments: list[Instrument]) -> dict[str, Quote]:
         now = now_ist()
         out = {}
         for inst in instruments:
-            bars = self._visible_15m(inst)
+            bars = self._live_15m(inst)
             last = bars[-1]
             today = [c for c in bars if c.time.date() == last.time.date()]
             prev_close = next((c.close for c in reversed(bars) if c.time.date() < last.time.date()), None)
-            price = last.close
-            if is_session_open(now):  # small wiggle so the live-update path is exercised
-                price = round(price * (1 + 0.0005 * np.sin(now.timestamp() / 7 + _seed(inst.symbol))), 2)
+            price = last.close  # the 1-minute path up to now, never the bar's future close
             change = price - prev_close if prev_close else None
             out[inst.instrument_key] = Quote(
                 instrument_key=inst.instrument_key, symbol=inst.symbol, last_price=price,
@@ -121,11 +137,13 @@ class DemoProvider(MarketDataProvider):
 
     async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
         now = now_ist()
-        bars = self._visible_15m(instrument)
+        bars = self._visible_15m(instrument) if timeframe == "1m" else self._live_15m(instrument)
         cutoff = now - timedelta(days=TIMEFRAMES[timeframe].lookback_days)
         bars = [c for c in bars if c.time >= cutoff]
         if timeframe == "1m":
             out = [m for c in bars for m in _split_minutes(c, _seed(instrument.symbol)) if m.time <= now]
+        elif timeframe == "5m":
+            out = self._five_minute(instrument, bars, now)
         elif timeframe == "15m":
             out = bars
         elif timeframe == "1h":
@@ -134,6 +152,22 @@ class DemoProvider(MarketDataProvider):
         else:
             out = _resample(bars, lambda c: datetime.combine(c.time.date(), time(0), tzinfo=IST))
         return out if include_partial else drop_incomplete(out, timeframe, now)
+
+    def _five_minute(self, inst: Instrument, bars: list[Candle], now: datetime) -> list[Candle]:
+        """5-minute bars built from the 1-minute path (cached per minute)."""
+        stamp = now.replace(second=0, microsecond=0)
+        hit = self._five.get(inst.instrument_key)
+        if hit and hit[0] == stamp:
+            return list(hit[1])
+        seed = _seed(inst.symbol)
+        minutes = [m for c in bars for m in _split_minutes(c, seed) if m.time <= now]
+        out = _resample(minutes, _bucket_5m)
+        self._five[inst.instrument_key] = (stamp, out)
+        return list(out)
+
+
+def _bucket_5m(c: Candle) -> datetime:
+    return c.time.replace(minute=c.time.minute - c.time.minute % 5)
 
 
 def _split_minutes(bar: Candle, seed: int) -> list[Candle]:

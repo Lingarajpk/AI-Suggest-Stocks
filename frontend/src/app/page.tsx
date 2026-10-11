@@ -1,5 +1,5 @@
-import { Dashboard } from "@/components/Dashboard";
+import { IntradayDesk } from "@/components/IntradayDesk";
 
 export default function Home() {
-  return <Dashboard />;
+  return <IntradayDesk />;
 }

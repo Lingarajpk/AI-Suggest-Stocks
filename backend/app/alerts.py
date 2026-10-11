@@ -4,6 +4,7 @@ Runs on the backend independently of any open browser. Three kinds of alert:
   * signal  - a new BUY/SELL signal point on a just-completed candle (default 15m)
   * level   - the day's change crosses a threshold (default +/-2% and +/-4%), once per day
   * fast    - price moves >= FAST_MOVE_PCT within FAST_WINDOW minutes (with a cooldown)
+  * intraday- NIFTY 50 / BANK NIFTY / SENSEX turn BUY or SELL (5-minute entry confirmed by 15-minute trend)
 
 Every alert is kept in memory (recent history), pushed to browsers over the WebSocket,
 and optionally sent to Telegram.
@@ -12,6 +13,7 @@ and optionally sent to Telegram.
 import asyncio
 import itertools
 import logging
+import time
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable
@@ -19,9 +21,9 @@ from typing import Awaitable, Callable
 import httpx
 
 from app.config import Settings
-from app.market_session import is_session_open, now_ist
+from app.market_session import IST, SESSION_CLOSE, is_session_open, now_ist
 from app.models import Quote
-from app.providers.base import ProviderError
+from app.providers.base import TIMEFRAMES, ProviderError
 from app.service import MarketService
 
 log = logging.getLogger(__name__)
@@ -59,10 +61,12 @@ class AlertEngine:
         self.alerts: deque[dict] = deque(maxlen=200)
         self.listeners: list[Listener] = []
         self.telegram: TelegramNotifier | None = None
-        self._ids = itertools.count(1)
+        # Clock-seeded so ids keep increasing across restarts (the browser dedupes and counts unread by id).
+        self._ids = itertools.count(int(time.time() * 1000))
         self._fired: dict[str, datetime] = {}
         self._prices: dict[str, deque[tuple[datetime, float]]] = {}
         self._last_signal_check: datetime | None = None
+        self._closing_check_done: str | None = None
         self._task: asyncio.Task | None = None
         self.levels = sorted({abs(float(x)) for x in settings.alert_move_levels.split(",") if x.strip()})
 
@@ -90,7 +94,7 @@ class AlertEngine:
                         await self.check_signals()
                 except ProviderError as exc:
                     if exc.http_status == 401:
-                        await self._emit_once("auth", "system", "Upstox login needed", "Alerts are paused until you log in with Upstox again.", None, None)
+                        await self._emit_once(f"auth:{now.date()}", "system", "Upstox login needed", "Alerts are paused until you log in with Upstox again.", None, None)
                         await asyncio.sleep(60)
                         continue
                     log.warning("alert check failed: %s", exc.message)
@@ -98,6 +102,15 @@ class AlertEngine:
                     log.exception("alert check failed")
                 await asyncio.sleep(self.settings.quote_poll_seconds)
             else:
+                # One last signal check just after the close, so the session's final candle is covered.
+                day = now.date().isoformat()
+                if (now.weekday() < 5 and now.time() >= SESSION_CLOSE and self._closing_check_done != day
+                        and self._last_signal_check and self._last_signal_check.date() == now.date()):
+                    self._closing_check_done = day
+                    try:
+                        await self.check_signals()
+                    except Exception:
+                        log.exception("closing signal check failed")
                 await asyncio.sleep(30)
 
     # ---- checks ------------------------------------------------------
@@ -122,6 +135,8 @@ class AlertEngine:
 
             # Fast move versus the price FAST_WINDOW minutes ago.
             hist = self._prices.setdefault(sym, deque())
+            if hist and hist[-1][0].date() != now.date():
+                hist.clear()  # never compare against the previous session's price
             hist.append((now, q.last_price))
             window = timedelta(minutes=self.settings.alert_fast_window_minutes)
             while len(hist) > 1 and now - hist[1][0] >= window:
@@ -138,9 +153,26 @@ class AlertEngine:
                         f"{sym} went from ₹{old:,.2f} to ₹{q.last_price:,.2f} in {mins} minutes (day {q.change_pct:+.2f}%).", sym, q,
                     )
 
+    @staticmethod
+    def candle_too_old(start_iso: str | None, tf: str, now: datetime, max_age: timedelta = timedelta(hours=2)) -> bool:
+        """Age is measured from when the candle *completed* (daily candles complete at the close)."""
+        if not start_iso:
+            return True
+        start = datetime.fromisoformat(start_iso).astimezone(IST)
+        close = datetime.combine(start.date(), SESSION_CLOSE, tzinfo=IST)
+        bar = TIMEFRAMES[tf].bar_minutes
+        end = close if bar == 0 else min(start + timedelta(minutes=bar), close)
+        return now - end > max_age
+
     async def check_signals(self) -> None:
+        await self.check_intraday()
         tf = self.settings.alert_signal_timeframe
         scan = await self.service.scan(tf)
+        try:
+            await self.service.pattern_stats(tf)  # pooled pattern hit rates quoted in alerts (cached 30 min)
+            await self.service.strategy_stats(tf)
+        except ProviderError as exc:
+            log.warning("pattern stats unavailable: %s", exc.message)
         now = self.clock()
         for row in scan["rows"]:
             a = row.get("analysis")
@@ -148,11 +180,13 @@ class AlertEngine:
                 continue
             sig, hist = a["signal"], a.get("history") or {}
             await self._check_trade(row, sig, hist, tf, now)
+            await self._check_patterns(row, (a.get("patterns") or {}).get("current") or [], sig, tf, now)
+            await self._check_strategies(row, (a.get("strategies") or {}).get("strategies") or [], sig, tf, now)
             m = hist.get("latest_marker")
             # Only a marker on the newest completed candle is "new"; older ones were already shown on the chart.
             if not m or m["time"] != sig.get("last_candle_time"):
                 continue
-            if now - datetime.fromisoformat(m["time"]) > timedelta(hours=2):
+            if self.candle_too_old(m["time"], tf, now):
                 continue
             sym = row["instrument"]["symbol"]
             side = m["side"]
@@ -173,11 +207,34 @@ class AlertEngine:
                 f"{sym} at ₹{m['price']:,.2f}, score {m['score']:+.0f}.{levels}{status} {record}", sym, q,
             )
 
+    async def check_intraday(self) -> None:
+        """Alert when an index's intraday call turns BUY or SELL on a just-completed 5-minute candle."""
+        now = self.clock()
+        desk = await self.service.intraday(include_stocks=False)
+        for card in desk["indices"]:
+            if "error" in card or card["verdict"] not in ("BUY", "SELL"):
+                continue
+            if not card["since_known"] or card["since"] != card["last_candle_time"] or self.candle_too_old(card["since"], desk["entry_timeframe"], now):
+                continue  # only the candle on which the call changed
+            sym = card["instrument"]["symbol"]
+            buy = card["verdict"] == "BUY"
+            lv = card.get("levels") or {}
+            levels = (f" Entry {lv['entry_low']:,.2f}-{lv['entry_high']:,.2f}, target {lv['target']:,.2f}, stop {lv['stop']:,.2f}."
+                      if lv else "")
+            up = card["entry"].get("up_pct")
+            odds = f" 5-min up probability {up:.0f}%." if up is not None else ""
+            q = self.service.cached_quote(card["instrument"]["instrument_key"])
+            await self._emit_once(
+                f"intraday:{sym}:{card['verdict']}:{card['since']}", "up" if buy else "down",
+                f"{'▲ INTRADAY BUY' if buy else '▼ INTRADAY SELL'}: {sym}",
+                f"{sym} at {card['price']:,.2f}. {card['reason']}{odds}{levels}", sym, q,
+            )
+
     async def _check_trade(self, row: dict, sig: dict, hist: dict, tf: str, now: datetime) -> None:
         """Exit and early-warning alerts for the trade opened by a BUY/SELL signal."""
         sym = row["instrument"]["symbol"]
         last_candle = sig.get("last_candle_time")
-        if not last_candle or now - datetime.fromisoformat(last_candle) > timedelta(hours=2):
+        if self.candle_too_old(last_candle, tf, now):
             return
         q = self.service.cached_quote(row["instrument"]["instrument_key"])
         ex = hist.get("latest_exit")
@@ -199,6 +256,53 @@ class AlertEngine:
                 f"Open {ot['side'].upper()} from ₹{ot['entry_price']:,.2f} is {ot['pnl_pct']:+.2f}% now: "
                 f"{', '.join(ot['warnings'])}. Watch the stop at ₹{ot['stop']:,.2f}.",
                 sym, q,
+            )
+
+    async def _check_patterns(self, row: dict, patterns: list[dict], sig: dict, tf: str, now: datetime) -> None:
+        """Alert when a chart pattern breaks out on the newest completed candle."""
+        last_candle = sig.get("last_candle_time")
+        if self.candle_too_old(last_candle, tf, now):
+            return
+        sym = row["instrument"]["symbol"]
+        pooled = {p["key"]: p for p in (self.service.cached_pattern_stats(tf) or {}).get("patterns", [])}
+        q = self.service.cached_quote(row["instrument"]["instrument_key"])
+        for p in patterns:
+            if p.get("breakout_time") != last_candle or p["status"] not in ("breakout", "target_hit", "stopped"):
+                continue
+            up = p["direction"] == "up"
+            st = pooled.get(p["key"]) or {}
+            record = (f" Measured on this universe: target reached {st['success_rate']}% of {st['resolved']} breakouts."
+                      if st.get("resolved") else "")
+            vol = " Volume confirmed." if p.get("volume_confirmed") else " Volume NOT above average (weaker breakout)."
+            await self._emit_once(
+                f"pattern:{sym}:{tf}:{p['key']}:{p['breakout_time']}", "up" if up else "down",
+                f"{'▲' if up else '▼'} {p['name']} breakout: {sym} ({tf})",
+                f"{sym} closed {'above' if up else 'below'} ₹{p['breakout_level']:,.2f}. Pattern target ₹{p['target']:,.2f}, "
+                f"stop ₹{p['stop']:,.2f}. Book rating {p['stars']}/4.{vol}{record}", sym, q,
+            )
+
+    async def _check_strategies(self, row: dict, states: list[dict], sig: dict, tf: str, now: datetime) -> None:
+        """Alert when a strategy (sweep, FVG, AMD, ...) fires on the newest completed candle."""
+        last_candle = sig.get("last_candle_time")
+        if self.candle_too_old(last_candle, tf, now):
+            return
+        sym = row["instrument"]["symbol"]
+        pooled = {r["key"]: r for r in (self.service.cached_strategy_stats(tf) or {}).get("rows", [])}
+        q = self.service.cached_quote(row["instrument"]["instrument_key"])
+        for st in states:
+            ls = st.get("last_signal")
+            # Breakout probability flips with candle colour: shown on the page, too frequent for alerts.
+            if st["key"] == "breakout_prob" or not ls or ls["time"] != last_candle:
+                continue
+            buy = ls["side"] == "buy"
+            rec = pooled.get(st["key"]) or {}
+            record = (f" Across the universe it was right {rec['hit_rate']}% of {rec['signals']} times (random {rec['base_rate']}%)."
+                      if rec.get("signals") else "")
+            detail = f" ({ls['detail']})" if ls.get("detail") else ""
+            await self._emit_once(
+                f"strategy:{sym}:{tf}:{st['key']}:{ls['time']}", "up" if buy else "down",
+                f"{'▲' if buy else '▼'} {st['name']}: {sym} ({tf})",
+                f"{sym} {'BUY' if buy else 'SELL'} setup at ₹{ls['price']:,.2f}{detail}.{record}", sym, q,
             )
 
     # ---- emit --------------------------------------------------------
@@ -256,8 +360,9 @@ class AlertEngine:
     def fast_movers(self) -> list[dict]:
         """Price change over the tracked window for each stock, largest absolute move first."""
         out = []
+        today = self.clock().date()
         for sym, hist in self._prices.items():
-            if len(hist) < 2 or not hist[0][1]:
+            if len(hist) < 2 or not hist[0][1] or hist[-1][0].date() != today:
                 continue
             (t0, p0), (t1, p1) = hist[0], hist[-1]
             out.append({"symbol": sym, "change_pct": round((p1 / p0 - 1) * 100, 2), "minutes": round((t1 - t0).total_seconds() / 60), "price": p1})

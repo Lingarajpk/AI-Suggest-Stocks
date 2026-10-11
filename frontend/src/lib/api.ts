@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import type { Health, ScanResult, StockDetail, Timeframe, TodayResult } from "./types";
+import type { Health, IntradayDesk, NewsFeed, PatternStatsResult, ScanResult, StockDetail, StockNews, StrategyStatsResult, Timeframe, TodayResult } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -31,6 +31,7 @@ export async function fetcher<T>(url: string): Promise<T> {
 
 export const TIMEFRAME_LABEL: Record<Timeframe, string> = {
   "1m": "1-minute",
+  "5m": "5-minute",
   "15m": "15-minute",
   "1h": "1-hour",
   "1d": "Daily",
@@ -49,9 +50,39 @@ export function useScanner(timeframe: Timeframe) {
 
 export function useStock(symbol: string, timeframe: Timeframe) {
   return useSWR<StockDetail, ApiError>(`/api/stocks/${encodeURIComponent(symbol)}?timeframe=${timeframe}`, fetcher, {
-    refreshInterval: timeframe === "1d" ? 300_000 : timeframe === "1m" ? 15_000 : 60_000,
+    refreshInterval: timeframe === "1d" ? 300_000 : timeframe === "1m" ? 15_000 : timeframe === "5m" ? 20_000 : 60_000,
     keepPreviousData: true,
   });
+}
+
+/** Intraday desk: index BUY/SELL calls (5-min entry, 15-min trend) and stocks with a live call. */
+export function useIntraday() {
+  return useSWR<IntradayDesk, ApiError>("/api/intraday", fetcher, { refreshInterval: 20_000, keepPreviousData: true });
+}
+
+/** Per-pattern success rates measured across the whole universe (the pattern "training"). */
+export function usePatternStats(timeframe: Timeframe) {
+  return useSWR<PatternStatsResult, ApiError>(`/api/patterns/stats?timeframe=${timeframe}`, fetcher, {
+    refreshInterval: 30 * 60_000,
+    keepPreviousData: true,
+  });
+}
+
+/** Each strategy's and candlestick's hit rate vs. random, pooled across the universe. */
+export function useStrategyStats(timeframe: Timeframe) {
+  return useSWR<StrategyStatsResult, ApiError>(`/api/strategies/stats?timeframe=${timeframe}`, fetcher, {
+    refreshInterval: 30 * 60_000,
+    keepPreviousData: true,
+  });
+}
+
+/** Live headlines for one stock + news-adjusted probability (backend polls the feed every few minutes). */
+export function useStockNews(symbol: string) {
+  return useSWR<StockNews, ApiError>(`/api/news/${encodeURIComponent(symbol)}`, fetcher, { refreshInterval: 60_000, keepPreviousData: true });
+}
+
+export function useNewsFeed(limit = 20) {
+  return useSWR<NewsFeed, ApiError>(`/api/news?limit=${limit}`, fetcher, { refreshInterval: 60_000, keepPreviousData: true });
 }
 
 export function useToday() {

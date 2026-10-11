@@ -15,13 +15,21 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
-import type { CandleData, ClosedTrade, Point, Scenario, SignalMarker } from "@/lib/types";
+import type { CandleData, ClosedTrade, PatternInstance, Point, Scenario, SignalMarker, StrategyBlock, StrategyKey } from "@/lib/types";
 
 const IST_OFFSET = 5.5 * 3600;
 // Lightweight Charts renders timestamps as UTC; shift so the axis reads in IST.
 const t = (iso: string) => (Date.parse(iso) / 1000 + IST_OFFSET) as UTCTimestamp;
 
-const C = { bull: "#22c55e", bear: "#f05252", muted: "#8494a7", line: "#1d2735", ema20: "#5aa9ff", ema50: "#f5a524", ema200: "#c084fc", bb: "#4d5b6d", vwap: "#2dd4bf" };
+const C = {
+  pattern: "#e879f9", bull: "#22c55e", bear: "#f05252", muted: "#8494a7", line: "#1d2735", ema20: "#5aa9ff", ema50: "#f5a524",
+  ema200: "#c084fc", bb: "#4d5b6d", vwap: "#2dd4bf", strategy: "#38bdf8", candle: "#fb923c", profile: "#fde047",
+};
+
+// Short chart labels for strategy markers (breakout probability flips too often to mark).
+const STRATEGY_TAG: Partial<Record<StrategyKey, string>> = {
+  trend_momentum: "T+M", liquidity_sweep: "Sweep", fvg: "FVG", ifvg: "IFVG", amd: "AMD", supertrend_flip: "ST", macd_divergence: "Div",
+};
 
 interface Props {
   candles: CandleData[];
@@ -35,16 +43,29 @@ interface Props {
   exits: ClosedTrade[];
   showMarkers: boolean;
   scenario: Scenario | null;
+  /** Live patterns are outlined; breakouts (live and recent) get a marker. */
+  patterns: PatternInstance[];
+  recentPatterns: PatternInstance[];
+  showPatterns: boolean;
+  /** Strategy points, candlesticks, FVG zones and volume-profile levels. */
+  strategies: StrategyBlock | null | undefined;
+  showStrategies: boolean;
+  showSupertrend: boolean;
+  showVwapBands: boolean;
   /** Still-forming candle, redrawn on every live quote. */
   liveBar: CandleData | null;
 }
 
-export function PriceChart({ candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario, liveBar }: Props) {
+export function PriceChart({
+  candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario, patterns, recentPatterns,
+  showPatterns, strategies, showStrategies, showSupertrend, showVwapBands, liveBar,
+}: Props) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const s = useRef<Record<string, ISeriesApi<"Candlestick" | "Histogram" | "Line">>>({});
   const priceLines = useRef<IPriceLine[]>([]);
   const markerApi = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
+  const patternSeries = useRef<ISeriesApi<"Line">[]>([]);
 
   useEffect(() => {
     if (!el.current) return;
@@ -75,6 +96,17 @@ export function PriceChart({ candles, series, oscillators, support, resistance, 
     s.current.bb_upper = line(C.bb);
     s.current.bb_lower = line(C.bb);
     s.current.vwap = line(C.vwap);
+    const dashed = (color: string, style: LineStyle) => {
+      const ls = line(color);
+      ls.applyOptions({ lineStyle: style });
+      return ls;
+    };
+    s.current.vwap_u1 = dashed(C.vwap, LineStyle.Dotted);
+    s.current.vwap_l1 = dashed(C.vwap, LineStyle.Dotted);
+    s.current.vwap_u2 = dashed(C.vwap, LineStyle.Dashed);
+    s.current.vwap_l2 = dashed(C.vwap, LineStyle.Dashed);
+    s.current.st_up = line(C.bull, 0, 2);
+    s.current.st_down = line(C.bear, 0, 2);
 
     s.current.rsi14 = line("#a78bfa", 1, 2);
     s.current.rsi14.createPriceLine({ price: 70, color: C.bear, lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
@@ -97,6 +129,7 @@ export function PriceChart({ candles, series, oscillators, support, resistance, 
       s.current = {};
       priceLines.current = [];
       markerApi.current = null;
+      patternSeries.current = [];
     };
   }, []);
 
@@ -112,6 +145,16 @@ export function PriceChart({ candles, series, oscillators, support, resistance, 
     ser.bb_upper.applyOptions({ visible: showBands });
     ser.bb_lower.applyOptions({ visible: showBands });
     ser.vwap.applyOptions({ visible: intraday });
+    for (const k of ["vwap_u1", "vwap_l1", "vwap_u2", "vwap_l2"]) {
+      ser[k].setData(pts(series[k]));
+      ser[k].applyOptions({ visible: intraday && showVwapBands });
+    }
+    // Supertrend: one green series for up-trend stretches, one red for down-trend (gaps elsewhere).
+    const st = series.supertrend ?? [];
+    for (const [k, d] of [["st_up", 1], ["st_down", -1]] as const) {
+      ser[k].setData(st.map((x) => (x.dir === d ? { time: t(x.time), value: x.value } : { time: t(x.time) })));
+      ser[k].applyOptions({ visible: showSupertrend });
+    }
     ser.rsi14.setData(pts(oscillators.rsi14));
     ser.macd.setData(pts(oscillators.macd));
     ser.macd_signal.setData(pts(oscillators.macd_signal));
@@ -133,6 +176,12 @@ export function PriceChart({ candles, series, oscillators, support, resistance, 
       add(scenario.target, C.bull, "Target");
       add(scenario.stop_loss, C.bear, "Stop");
     }
+    const vp = strategies?.volume_profile;
+    if (showStrategies && vp) {
+      for (const [price, title, style] of [[vp.poc, "POC", LineStyle.Solid], [vp.vah, "VAH", LineStyle.Dotted], [vp.val, "VAL", LineStyle.Dotted]] as const) {
+        if (price != null) priceLines.current.push(cs.createPriceLine({ price, color: C.profile, lineStyle: style, lineWidth: 1, title }));
+      }
+    }
 
     const entryMarks = markers.map((m) => ({
       time: t(m.time),
@@ -149,8 +198,72 @@ export function PriceChart({ candles, series, oscillators, support, resistance, 
       color: C.ema50,
       text: `${x.side === "buy" ? "EXIT" : "COVER"} ${x.pnl_pct > 0 ? "+" : ""}${x.pnl_pct.toFixed(1)}%`,
     }));
-    markerApi.current?.setMarkers(showMarkers ? [...entryMarks, ...exitMarks].sort((a, b) => a.time - b.time) : []);
-  }, [candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario]);
+    // Pattern outlines: swing points joined up, plus the pattern's trendlines (each its own 2-point series).
+    const c = chart.current;
+    patternSeries.current.forEach((ps) => c.removeSeries(ps));
+    patternSeries.current = [];
+    const draw = (pts: { time: string; price: number }[], color: string, style: LineStyle) => {
+      const data = pts.map((p) => ({ time: t(p.time), value: p.price }));
+      if (data.length < 2 || data.some((d, i) => i > 0 && d.time <= data[i - 1].time)) return;
+      const ps = c.addSeries(LineSeries, { color, lineWidth: 1, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+      ps.setData(data);
+      patternSeries.current.push(ps);
+    };
+    // Open fair value gaps: top and bottom edge from where the gap formed to the latest candle.
+    const lastTime = candles.at(-1)?.time;
+    if (showStrategies && lastTime) {
+      for (const z of strategies?.fvg_zones ?? []) {
+        const color = z.direction === "up" ? C.bull : C.bear;
+        const style = z.kind === "fvg" ? LineStyle.Solid : LineStyle.Dashed;
+        draw([{ time: z.start_time, price: z.high }, { time: lastTime, price: z.high }], color, style);
+        draw([{ time: z.start_time, price: z.low }, { time: lastTime, price: z.low }], color, style);
+      }
+    }
+    if (showPatterns) {
+      for (const p of patterns) {
+        const color = p.direction === "up" || p.bias === "bullish" ? C.bull : p.direction === "down" || p.bias === "bearish" ? C.bear : C.pattern;
+        draw(p.points, C.pattern, LineStyle.Dotted);
+        p.lines.forEach((l) => draw(l, color, LineStyle.Dashed));
+      }
+    }
+    const patternMarks = showPatterns
+      ? [...patterns, ...recentPatterns]
+          .filter((p) => p.breakout_time)
+          .map((p) => ({
+            time: t(p.breakout_time!),
+            position: p.direction === "up" ? ("belowBar" as const) : ("aboveBar" as const),
+            shape: "circle" as const,
+            color: C.pattern,
+            text: p.name,
+          }))
+      : [];
+    const strategyMarks = showStrategies
+      ? [
+          ...(strategies?.markers ?? [])
+            .filter((m) => STRATEGY_TAG[m.key])
+            .map((m) => ({
+              time: t(m.time),
+              position: m.side === "buy" ? ("belowBar" as const) : ("aboveBar" as const),
+              shape: "square" as const,
+              color: C.strategy,
+              text: STRATEGY_TAG[m.key]!,
+            })),
+          ...(strategies?.candles ?? []).map((k) => ({
+            time: t(k.time),
+            position: k.direction === "up" ? ("belowBar" as const) : ("aboveBar" as const),
+            shape: "circle" as const,
+            color: C.candle,
+            text: k.name,
+          })),
+        ]
+      : [];
+    markerApi.current?.setMarkers(
+      [...(showMarkers ? [...entryMarks, ...exitMarks] : []), ...patternMarks, ...strategyMarks].sort((a, b) => a.time - b.time),
+    );
+  }, [
+    candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario, patterns, recentPatterns,
+    showPatterns, strategies, showStrategies, showSupertrend, showVwapBands,
+  ]);
 
   // Runs after the data effect above, so the live candle sits on top of the latest setData.
   useEffect(() => {
@@ -173,4 +286,10 @@ export const CHART_LEGEND = [
   { label: "▲ BUY / ▼ SELL signal points", color: C.bull },
   { label: "EXIT (sell the buy) / COVER (buy back the sell)", color: C.ema50 },
   { label: "Buy/Sell zone · Target · Stop (current setup)", color: C.ema20 },
+  { label: "● Chart pattern outline / breakout", color: C.pattern },
+  { label: "Supertrend 10,3 (green up / red down)", color: C.bull },
+  { label: "VWAP ±1σ / ±2σ bands (intraday)", color: C.vwap },
+  { label: "■ Strategy signal (T+M, Sweep, FVG, IFVG, AMD, ST flip, MACD Div) · FVG zones", color: C.strategy },
+  { label: "● Candlestick pattern", color: C.candle },
+  { label: "POC / value area (VAH–VAL)", color: C.profile },
 ];
