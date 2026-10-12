@@ -34,7 +34,8 @@ Rules:
 
 # Grouped numbers (1,241.90 / 1,23,456) or plain ones; a trailing comma is never captured.
 NUMBER_RE = re.compile(r"(?<![\w.])-?(?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.\d+)?")
-BAR_UNIT = {"1d": "day", "1h": "hour", "5m": "5-minute bar", "15m": "15-minute bar", "1m": "1-minute bar"}
+BAR_UNIT = {"1w": "week", "1d": "day", "1h": "hour", "30m": "30-minute bar", "15m": "15-minute bar", "5m": "5-minute bar",
+            "3m": "3-minute bar", "1m": "1-minute bar"}
 
 
 def _numbers(text: str) -> list[float]:

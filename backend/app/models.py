@@ -3,7 +3,12 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-Timeframe = Literal["1m", "5m", "15m", "1h", "1d"]
+Timeframe = Literal["1m", "3m", "5m", "15m", "30m", "1h", "1d", "1w"]
+
+
+def is_intraday(timeframe: str) -> bool:
+    """Bars inside one trading session (session VWAP, opening-range strategies apply)."""
+    return timeframe not in ("1d", "1w")
 DataSource = Literal["upstox", "demo"]
 # polled: fetched from the REST quote API during market hours and recent enough
 # stale: market open but last trade older than STALE_AFTER_SECONDS

@@ -145,6 +145,8 @@ export function PriceChart({
     ser.bb_upper.applyOptions({ visible: showBands });
     ser.bb_lower.applyOptions({ visible: showBands });
     ser.vwap.applyOptions({ visible: intraday });
+    // Daily/weekly bars have no meaningful clock time: show dates only.
+    chart.current.applyOptions({ timeScale: { timeVisible: intraday } });
     for (const k of ["vwap_u1", "vwap_l1", "vwap_u2", "vwap_l2"]) {
       ser[k].setData(pts(series[k]));
       ser[k].applyOptions({ visible: intraday && showVwapBands });
@@ -274,7 +276,8 @@ export function PriceChart({
     ser.volume.update({ time, value: liveBar.volume, color: liveBar.close >= liveBar.open ? "rgba(34,197,94,0.25)" : "rgba(240,82,82,0.25)" });
   }, [liveBar, candles]);
 
-  return <div ref={el} className="h-[560px] w-full" />;
+  // Big on every screen: most of the viewport height, within sensible bounds.
+  return <div ref={el} className="h-[68vh] min-h-[440px] max-h-[860px] w-full" />;
 }
 
 export const CHART_LEGEND = [

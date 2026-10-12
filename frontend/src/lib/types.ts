@@ -1,4 +1,4 @@
-export type Timeframe = "1m" | "5m" | "15m" | "1h" | "1d";
+export type Timeframe = "1m" | "3m" | "5m" | "15m" | "30m" | "1h" | "1d" | "1w";
 export type Freshness = "polled" | "stale" | "market_closed" | "unavailable" | "demo";
 export type SignalLabel = "Strong Bullish" | "Bullish" | "Neutral" | "Bearish" | "Strong Bearish";
 
@@ -261,7 +261,17 @@ export interface Health {
   status: string;
   data_mode: "demo" | "upstox";
   provider: string;
-  upstox: { authenticated: boolean; source: string; expires_at: string | null; invalid_reason: string | null } | null;
+  upstox: {
+    authenticated: boolean;
+    source: string;
+    expires_at: string | null;
+    invalid_reason: string | null;
+    connected_as?: string | null;
+    durable?: boolean;
+    owner_protected?: boolean;
+    auto_request?: boolean;
+    approval_pending?: boolean;
+  } | null;
   upstox_configured: boolean;
   cache: string;
   nvidia_configured: boolean;

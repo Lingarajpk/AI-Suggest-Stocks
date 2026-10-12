@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from app.market_session import IST, SESSION_CLOSE
 from app.models import Candle, Instrument, Quote, Timeframe
@@ -20,7 +20,7 @@ class ProviderError(Exception):
 
 
 class NotAuthenticated(ProviderError):
-    def __init__(self, message: str = "Upstox is not connected. Log in via /api/auth/upstox/login.") -> None:
+    def __init__(self, message: str = "Live data is offline: Upstox is not connected. The site owner needs to reconnect it.") -> None:
         super().__init__("provider_not_authenticated", message, 401)
 
 
@@ -31,18 +31,57 @@ class RateLimited(ProviderError):
 
 @dataclass(frozen=True)
 class TimeframeSpec:
-    bar_minutes: int  # 0 for daily
+    bar_minutes: int  # 0 for daily and weekly
     lookback_days: int
     cache_seconds: int
+    weekly: bool = False
 
 
 TIMEFRAMES: dict[str, TimeframeSpec] = {
     "1m": TimeframeSpec(bar_minutes=1, lookback_days=5, cache_seconds=15),
+    "3m": TimeframeSpec(bar_minutes=3, lookback_days=10, cache_seconds=20),
     "5m": TimeframeSpec(bar_minutes=5, lookback_days=20, cache_seconds=30),
     "15m": TimeframeSpec(bar_minutes=15, lookback_days=45, cache_seconds=60),
+    "30m": TimeframeSpec(bar_minutes=30, lookback_days=90, cache_seconds=120),
     "1h": TimeframeSpec(bar_minutes=60, lookback_days=120, cache_seconds=300),
     "1d": TimeframeSpec(bar_minutes=0, lookback_days=900, cache_seconds=1800),
+    # Weekly candles are built from daily ones, so the current week is always up to date.
+    "1w": TimeframeSpec(bar_minutes=0, lookback_days=900, cache_seconds=1800, weekly=True),
 }
+
+
+def resample(candles: list[Candle], bucket) -> list[Candle]:
+    """Merge consecutive candles that share bucket(candle) (the new bar's start time)."""
+    groups: dict[datetime, list[Candle]] = {}
+    for c in candles:
+        groups.setdefault(bucket(c), []).append(c)
+    return [
+        Candle(time=t, open=g[0].open, high=max(c.high for c in g), low=min(c.low for c in g),
+               close=g[-1].close, volume=sum(c.volume for c in g))
+        for t, g in groups.items()
+    ]
+
+
+def week_start(c: Candle) -> datetime:
+    """Monday 00:00 IST of the candle's week."""
+    d = c.time.astimezone(IST).date()
+    return datetime.combine(d - timedelta(days=d.weekday()), time(0), tzinfo=IST)
+
+
+def to_weekly(daily: list[Candle]) -> list[Candle]:
+    """Weekly candles from daily ones; the oldest week is dropped as the history may start mid-week."""
+    weeks = resample(daily, week_start)
+    return weeks[1:] if len(weeks) > 1 else weeks
+
+
+def session_bucket(minutes: int):
+    """Bucket intraday candles into `minutes`-long bars aligned to the 09:15 open."""
+    def bucket(c: Candle) -> datetime:
+        t = c.time.astimezone(IST)
+        since_open = t.hour * 60 + t.minute - (9 * 60 + 15)
+        start = 9 * 60 + 15 + (since_open // minutes) * minutes
+        return t.replace(hour=start // 60, minute=start % 60, second=0, microsecond=0)
+    return bucket
 
 
 def drop_incomplete(candles: list[Candle], timeframe: Timeframe, now: datetime) -> list[Candle]:
@@ -53,7 +92,10 @@ def drop_incomplete(candles: list[Candle], timeframe: Timeframe, now: datetime) 
     start = last.time.astimezone(IST)
     close_of_day = datetime.combine(start.date(), SESSION_CLOSE, tzinfo=IST)
     spec = TIMEFRAMES[timeframe]
-    end = close_of_day if spec.bar_minutes == 0 else min(start + timedelta(minutes=spec.bar_minutes), close_of_day)
+    if spec.weekly:  # a week completes at Friday's close
+        end = close_of_day + timedelta(days=4 - start.weekday())
+    else:
+        end = close_of_day if spec.bar_minutes == 0 else min(start + timedelta(minutes=spec.bar_minutes), close_of_day)
     return candles if end <= now else candles[:-1]
 
 

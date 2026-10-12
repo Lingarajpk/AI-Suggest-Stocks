@@ -1,7 +1,7 @@
 "use client";
 
 import { Crosshair } from "lucide-react";
-import { TIMEFRAME_LABEL, edgeVerdict, useStrategyStats } from "@/lib/api";
+import { TIMEFRAME_LABEL, edgeVerdict, isIntraday, useStrategyStats } from "@/lib/api";
 import { fmtPct, fmtPrice, fmtTime } from "@/lib/format";
 import type { StrategyBlock, StrategyState, StrategyStatsRow, Timeframe } from "@/lib/types";
 import { Panel } from "./ui";
@@ -162,7 +162,7 @@ export function StrategiesPanel({ block, timeframe }: { block: StrategyBlock | n
                       <span>
                         <span className={c.direction === "up" ? "text-bull" : "text-bear"}>{c.direction === "up" ? "▲" : "▼"}</span> {c.name}
                       </span>
-                      <span className="text-faint">{fmtTime(c.time, timeframe === "1d")}</span>
+                      <span className="text-faint">{fmtTime(c.time, !isIntraday(timeframe))}</span>
                     </li>
                   ))}
               </ul>

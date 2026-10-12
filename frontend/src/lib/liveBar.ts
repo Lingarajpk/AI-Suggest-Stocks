@@ -1,7 +1,7 @@
 import type { CandleData, Quote, Timeframe } from "./types";
 
 const IST_MS = 5.5 * 3600 * 1000;
-const BAR_MINUTES: Record<Timeframe, number> = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "1d": 0 };
+const BAR_MINUTES: Record<Timeframe, number> = { "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 0, "1w": 0 };
 const SESSION_OPEN_MIN = 9 * 60 + 15;
 
 /** Start of the bar containing `ms`, as an ISO string (bars are aligned to the 09:15 IST open). */
@@ -9,6 +9,10 @@ function barStart(ms: number, tf: Timeframe): string {
   const ist = new Date(ms + IST_MS); // fields read with getUTC* are IST wall-clock values
   const dayStartUtc = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()) - IST_MS;
   if (tf === "1d") return new Date(dayStartUtc).toISOString();
+  if (tf === "1w") {
+    const sinceMonday = (ist.getUTCDay() + 6) % 7;
+    return new Date(dayStartUtc - sinceMonday * 86_400_000).toISOString();
+  }
   const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
   const size = BAR_MINUTES[tf];
   const offset = Math.max(0, Math.floor((mins - SESSION_OPEN_MIN) / size) * size);
@@ -26,6 +30,16 @@ export function buildLiveBar(tf: Timeframe, forming: CandleData | null | undefin
   }
   const price = quote.last_price;
   const at = Date.parse(quote.last_trade_time ?? quote.fetched_at);
+
+  if (tf === "1w") {
+    // The week's open/high/low come from the backend's forming weekly candle; the quote moves its close.
+    const start = barStart(at, "1w");
+    if (Date.parse(start) <= lastMs) return null;
+    if (forming && Date.parse(forming.time) === Date.parse(start)) {
+      return { ...forming, high: Math.max(forming.high, price), low: Math.min(forming.low, price), close: price };
+    }
+    return { time: start, open: quote.open ?? price, high: Math.max(quote.high ?? price, price), low: Math.min(quote.low ?? price, price), close: price, volume: quote.volume ?? 0 };
+  }
 
   if (tf === "1d") {
     const start = barStart(at, "1d");

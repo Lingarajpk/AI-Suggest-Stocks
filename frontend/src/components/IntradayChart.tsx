@@ -21,7 +21,7 @@ const t = (iso: string) => (Date.parse(iso) / 1000 + IST_OFFSET) as UTCTimestamp
 const C = { bull: "#22c55e", bear: "#f05252", muted: "#8494a7", line: "#1d2735", vwap: "#2dd4bf", ema: "#5aa9ff", entry: "#5aa9ff" };
 
 /** Compact 5-minute chart for an intraday card: candles, session VWAP (±1σ), Supertrend, signal arrows, levels. */
-export function IntradayChart({ card, liveBar, height = 260 }: { card: IntradayCard; liveBar: CandleData | null; height?: number }) {
+export function IntradayChart({ card, liveBar, height = 380 }: { card: IntradayCard; liveBar: CandleData | null; height?: number }) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const s = useRef<Record<string, ISeriesApi<"Candlestick" | "Line">>>({});

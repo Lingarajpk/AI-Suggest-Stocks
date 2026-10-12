@@ -29,6 +29,18 @@ class Settings(BaseSettings):
     # Optional: a token generated elsewhere. Normally obtained via the OAuth login flow.
     upstox_access_token: SecretStr = SecretStr("")
     upstox_base_url: str = "https://api.upstox.com"
+    # Only someone with this key can (re)connect Upstox, so visitors can't replace the owner's token.
+    admin_key: SecretStr = SecretStr("")
+    # Optional: the owner's Upstox user ID (UCC). Tokens of any other Upstox account are refused.
+    upstox_owner_user_id: str = ""
+    # Ask Upstox for the day's token automatically (the owner approves it in the Upstox app);
+    # the token is delivered to /api/auth/upstox/notifier (set as the Notifier URL on the Upstox app).
+    upstox_auto_request: bool = False
+    upstox_auto_request_time: str = "08:45"  # IST, trading days
+    # Optional: this backend's public health URL, pinged during market hours so free hosting doesn't sleep.
+    keepalive_url: str = ""
+    # Train models at startup (turned off in tests).
+    warm_up: bool = True
     upstox_instruments_url: str = (
         "https://assets.upstox.com/market-quote/instruments/exchange/{exchange}.json.gz"
     )

@@ -15,7 +15,10 @@ from app.models import Timeframe
 
 MIN_BARS = 60
 MIN_RISK_REWARD = 1.0
-MAX_HISTORY_AGE = {"1m": timedelta(days=4), "5m": timedelta(days=4), "15m": timedelta(days=4), "1h": timedelta(days=4), "1d": timedelta(days=6)}
+MAX_HISTORY_AGE = {tf: timedelta(days=4) for tf in ("1m", "3m", "5m", "15m", "30m", "1h")} | {
+    "1d": timedelta(days=6), "1w": timedelta(days=14)}
+# ATR as % of price above which volatility is flagged as a risk.
+HIGH_VOL_ATR_PCT = {"1d": 3.0, "1w": 6.0}
 WEIGHTS = {"trend": 30, "macd": 20, "rsi": 20, "momentum": 15, "vwap": 15}
 
 
@@ -122,7 +125,7 @@ def evaluate(
 
     support, resistance = swing_levels(df, close)
     risks = []
-    if atr and atr / close * 100 > (3 if timeframe == "1d" else 1.2):
+    if atr and atr / close * 100 > HIGH_VOL_ATR_PCT.get(timeframe, 1.2):
         risks.append(f"High volatility: ATR is {atr / close * 100:.2f}% of price")
     if v["rsi14"] is not None and (v["rsi14"] > 70 or v["rsi14"] < 30):
         risks.append(f"RSI at {v['rsi14']:.1f} — stretched, mean-reversion risk")

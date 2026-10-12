@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ArrowLeft, ShieldAlert, Star } from "lucide-react";
-import { TIMEFRAME_LABEL, useHealth, useStock } from "@/lib/api";
+import { TIMEFRAME_LABEL, TIMEFRAME_SHORT, isIntraday, useHealth, useStock } from "@/lib/api";
 import { changeColor, fmtCompact, fmtNum, fmtPct, fmtPrice, fmtSigned, fmtTime } from "@/lib/format";
 import type { Timeframe } from "@/lib/types";
 import { buildLiveBar } from "@/lib/liveBar";
@@ -22,7 +22,7 @@ import { CHART_LEGEND, PriceChart } from "./PriceChart";
 import { StatusNotices } from "./StatusNotices";
 import { FreshnessBadge, Panel, ScoreBar, SignalBadge, SkeletonRows } from "./ui";
 
-const TIMEFRAMES: Timeframe[] = ["1d", "1h", "15m", "5m", "1m"];
+const TIMEFRAMES: Timeframe[] = ["1m", "3m", "5m", "15m", "30m", "1h", "1d", "1w"];
 
 const INDICATOR_ROWS: [string, string, (v: number | null) => string][] = [
   ["EMA 9", "ema9", fmtPrice],
@@ -129,14 +129,17 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
           <Panel
             title={
-              <div className="flex rounded-lg border border-line bg-panel-2 p-0.5">
+              <div className="flex max-w-full overflow-x-auto rounded-lg border border-line bg-panel-2 p-0.5" role="tablist" aria-label="Candle size">
                 {TIMEFRAMES.map((tf) => (
                   <button
                     key={tf}
+                    role="tab"
+                    aria-selected={tf === timeframe}
+                    title={`${TIMEFRAME_LABEL[tf]} candles`}
                     onClick={() => setTimeframe(tf)}
-                    className={`rounded-md px-3 py-1 text-xs font-medium ${tf === timeframe ? "bg-accent/15 text-accent" : "text-muted hover:text-ink"}`}
+                    className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold tabular ${tf === timeframe ? "bg-accent/15 text-accent" : "text-muted hover:text-ink"}`}
                   >
-                    {TIMEFRAME_LABEL[tf]}
+                    {TIMEFRAME_SHORT[tf]}
                   </button>
                 ))}
               </div>
@@ -150,7 +153,7 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
                     ["Strategies & candles", showStrategies, setShowStrategies],
                     ["Supertrend", showSupertrend, setShowSupertrend],
                     ["Bollinger bands", showBands, setShowBands],
-                    ...(timeframe !== "1d" ? ([["VWAP bands", showVwapBands, setShowVwapBands]] as const) : []),
+                    ...(isIntraday(timeframe) ? ([["VWAP bands", showVwapBands, setShowVwapBands]] as const) : []),
                   ] as const
                 ).map(([label, on, set]) => (
                   <label key={label} className="flex items-center gap-1.5 text-xs text-muted">
@@ -162,7 +165,7 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
             }
           >
             {isLoading && !data ? (
-              <div className="h-[560px] animate-pulse rounded-lg bg-panel-2" />
+              <div className="h-[68vh] min-h-[440px] max-h-[860px] animate-pulse rounded-lg bg-panel-2" />
             ) : data?.candles.length ? (
               <>
                 <PriceChart
@@ -171,7 +174,7 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
                   oscillators={data.oscillators}
                   support={sig?.levels.support}
                   resistance={sig?.levels.resistance}
-                  intraday={data.timeframe !== "1d"}
+                  intraday={isIntraday(data.timeframe)}
                   showBands={showBands}
                   markers={data.history?.markers ?? []}
                   exits={data.history?.exits ?? []}
