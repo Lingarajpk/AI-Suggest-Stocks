@@ -20,7 +20,7 @@ import { StatusNotices } from "./StatusNotices";
 import { TodayOutlook } from "./TodayOutlook";
 import { Panel, SkeletonRows } from "./ui";
 
-const TIMEFRAMES: Timeframe[] = ["1d", "1h", "15m", "5m"];
+const TIMEFRAMES: Timeframe[] = ["1w", "1d", "1h", "30m", "15m", "5m"];
 
 export function Dashboard() {
   const [timeframe, setTimeframe] = useState<Timeframe>("1d");

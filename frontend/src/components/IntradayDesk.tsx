@@ -136,7 +136,7 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
       )}
 
       <div className="mt-3 -mx-1">
-        {card.chart ? <IntradayChart card={card} liveBar={liveBar} /> : <div className="h-[260px] animate-pulse rounded-lg bg-panel-2" />}
+        {card.chart ? <IntradayChart card={card} liveBar={liveBar} /> : <div className="h-[380px] animate-pulse rounded-lg bg-panel-2" />}
       </div>
 
       <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
@@ -242,10 +242,31 @@ function StockCalls({ title, rows, side, quotes }: { title: string; rows: Intrad
   );
 }
 
+/** Shown instead of a blank page when the desk can't load. */
+function DeskUnavailable({ status, code, message }: { status: number; code: string; message: string }) {
+  const offline = status === 401;
+  const waking = code === "backend_waking" || code === "backend_unreachable";
+  return (
+    <div className="flex flex-col items-center gap-2 rounded-xl border border-line bg-panel px-6 py-14 text-center">
+      <p className="text-lg font-semibold">
+        {offline ? "Live data is offline" : waking ? "Waking up the data server…" : "The intraday desk could not load"}
+      </p>
+      <p className="max-w-xl text-sm text-muted">
+        {offline
+          ? "The Upstox connection expires every day at 03:30 IST and the site owner hasn't renewed it yet. This page will fill in automatically as soon as it is."
+          : waking
+            ? "On free hosting the server sleeps when nobody uses it and takes 30–60 seconds to start. This page retries on its own."
+            : message}
+      </p>
+      {!offline && <span className="mt-2 size-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />}
+    </div>
+  );
+}
+
 export function IntradayDesk() {
   const health = useHealth();
   const stream = useQuoteStream();
-  const { data, error, isLoading } = useIntraday();
+  const { data, error } = useIntraday();
   const note = data ? SESSION_NOTE[data.session] : null;
 
   return (
@@ -265,17 +286,25 @@ export function IntradayDesk() {
         </div>
 
         {note && <p className="rounded-lg border border-warn/30 bg-warn/5 px-4 py-2 text-xs text-warn">{note}</p>}
-        {error && error.status !== 401 && (
-          <div className="rounded-xl border border-bear/30 bg-bear/5 px-4 py-3 text-sm text-bear">Intraday desk failed: {error.message}</div>
-        )}
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          {isLoading && !data
-            ? [0, 1, 2].map((i) => <div key={i} className="h-[640px] animate-pulse rounded-xl border border-line bg-panel" />)
-            : data?.indices.map((card) => (
-                <IndexCard key={card.instrument.instrument_key} card={card} quote={stream.quotes[card.instrument.symbol] ?? card.quote} />
-              ))}
-        </div>
+        {!data && error ? (
+          <DeskUnavailable status={error.status} code={error.code} message={error.message} />
+        ) : (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            {!data
+              ? [0, 1, 2].map((i) => (
+                  <div key={i} className="flex h-[720px] items-start justify-center rounded-xl border border-line bg-panel p-6 text-xs text-faint">
+                    <span className="animate-pulse">Loading {["NIFTY 50", "BANK NIFTY", "SENSEX"][i]}…</span>
+                  </div>
+                ))
+              : data.indices.length === 0
+                ? <p className="text-sm text-faint">The data provider returned no index data.</p>
+                : data.indices.map((card) => (
+                    <IndexCard key={card.instrument.instrument_key} card={card} quote={stream.quotes[card.instrument.symbol] ?? card.quote} />
+                  ))}
+          </div>
+        )}
+        {data && error && <p className="text-xs text-warn">Last refresh failed ({error.message}); showing the previous calls.</p>}
         {data && data.unavailable_indices.length > 0 && (
           <p className="text-xs text-warn">Not available from the data provider: {data.unavailable_indices.join(", ")}.</p>
         )}

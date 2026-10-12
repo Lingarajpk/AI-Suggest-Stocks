@@ -26,8 +26,9 @@ export function StatusNotices({ health, healthError, streamError }: { health?: H
     );
   }
   if (!health.upstox?.authenticated) {
+    const up = health.upstox;
     return (
-      <Notice tone="warn" icon={<KeyRound className="size-4" />} title="Connect your Upstox account">
+      <Notice tone="warn" icon={<KeyRound className="size-4" />} title={up?.approval_pending ? "Waiting for the owner to approve in the Upstox app…" : "Live data is offline"}>
         {health.upstox_configured ? (
           <>
             {loginError && (
@@ -35,11 +36,10 @@ export function StatusNotices({ health, healthError, streamError }: { health?: H
                 Upstox refused the last login: {loginError}
               </span>
             )}
-            Upstox access tokens expire daily (03:30 IST). Log in to authorise the backend; the token stays on the server.
-            {health.upstox?.invalid_reason && <> Last token: {health.upstox.invalid_reason.replaceAll("_", " ")}.</>}{" "}
-            <a href="/api/auth/upstox/login" className="ml-1 inline-block rounded-md bg-accent px-3 py-1 font-semibold text-bg hover:bg-accent/90">
-              Log in with Upstox
-            </a>
+            The site&apos;s Upstox connection expires every day at 03:30 IST and only the site owner can renew it. Visitors don&apos;t need to log in;
+            the page goes live by itself once it is renewed.
+            {up?.invalid_reason && <> Last connection: {up.invalid_reason.replaceAll("_", " ")}.</>}
+            <OwnerConnect protectedByKey={!!up?.owner_protected} />
           </>
         ) : (
           <>
@@ -58,6 +58,103 @@ export function StatusNotices({ health, healthError, streamError }: { health?: H
     );
   }
   return null;
+}
+
+const KEY_STORE = "aistock.ownerKey";
+
+function readKey(): string {
+  try {
+    return window.localStorage.getItem(KEY_STORE) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** Owner-only reconnect: an approval request to the Upstox app (no OTP page), or the classic login. */
+function OwnerConnect({ protectedByKey }: { protectedByKey: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [key, setKey] = useState("");
+  const [remember, setRemember] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    const saved = readKey();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time read of a device-local preference
+    if (saved) setKey(saved);
+  }, []);
+
+  const keep = () => {
+    try {
+      if (remember && key) window.localStorage.setItem(KEY_STORE, key);
+      else window.localStorage.removeItem(KEY_STORE);
+    } catch {
+      /* storage unavailable: nothing to remember */
+    }
+  };
+
+  const requestApproval = async () => {
+    keep();
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/auth/upstox/request?key=${encodeURIComponent(key)}`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) setMsg({ ok: true, text: "Request sent. Open the Upstox app and approve it; this page goes live by itself." });
+      else setMsg({ ok: false, text: res.status === 403 ? "Wrong owner key." : (body.detail ?? body.message ?? `Failed (HTTP ${res.status})`) });
+    } catch {
+      setMsg({ ok: false, text: "Could not reach the server. Try again in a minute." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="ml-1 text-xs font-semibold text-accent underline-offset-2 hover:underline">
+        I&apos;m the owner — reconnect
+      </button>
+    );
+  }
+  return (
+    <span className="mt-2 block space-y-2 rounded-lg border border-line bg-panel p-3 text-xs text-muted">
+      {protectedByKey && (
+        <span className="flex flex-wrap items-center gap-2">
+          <input
+            type="password"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="Owner key"
+            autoComplete="current-password"
+            className="min-w-0 flex-1 rounded-md border border-line bg-panel-2 px-2 py-1.5 text-ink outline-none focus:border-accent"
+          />
+          <label className="flex items-center gap-1">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-accent" /> Remember on this device
+          </label>
+        </span>
+      )}
+      <span className="flex flex-wrap gap-2">
+        <button
+          onClick={requestApproval}
+          disabled={busy || (protectedByKey && !key)}
+          className="rounded-md bg-accent px-3 py-1.5 font-semibold text-bg hover:bg-accent/90 disabled:opacity-50"
+        >
+          {busy ? "Sending…" : "Send approval to my Upstox app"}
+        </button>
+        <a
+          href={`/api/auth/upstox/login${key ? `?key=${encodeURIComponent(key)}` : ""}`}
+          onClick={keep}
+          className="rounded-md border border-line px-3 py-1.5 font-semibold text-ink hover:border-accent"
+        >
+          Log in with OTP instead
+        </a>
+      </span>
+      {msg && <span className={`block ${msg.ok ? "text-bull" : "text-bear"}`}>{msg.text}</span>}
+      {!protectedByKey && (
+        <span className="block text-warn">ADMIN_KEY is not set on the backend, so anyone can replace the connection. Set it to lock this to you.</span>
+      )}
+    </span>
+  );
 }
 
 /** Reads ?upstox=error&message=… set by the backend after a failed OAuth callback. */

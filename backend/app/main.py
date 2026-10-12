@@ -6,6 +6,8 @@ import logging
 import secrets
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from datetime import time as dtime
 from urllib.parse import urlencode
 
 import httpx
@@ -17,7 +19,7 @@ from app.ai.nvidia import NvidiaExplainer
 from app.alerts import AlertEngine, TelegramNotifier
 from app.cache import create_cache
 from app.config import get_settings
-from app.market_session import is_session_open, now_ist, session_state
+from app.market_session import IST, is_session_open, is_trading_weekday, now_ist, session_state
 from app.models import Timeframe
 from app.news import NewsService, NewsStore
 from app.providers.base import ProviderError
@@ -97,7 +99,10 @@ class QuoteHub:
 async def lifespan(app: FastAPI):
     http = httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=10.0))
     cache = create_cache(settings.redis_url)
-    tokens = TokenStore(settings.data_dir / ".upstox_token.json", settings.upstox_access_token.get_secret_value())
+    # Redis (when configured) keeps the token across restarts; local files don't survive on free hosting.
+    durable = cache if cache.backend == "redis" else None
+    tokens = TokenStore(settings.data_dir / ".upstox_token.json", settings.upstox_access_token.get_secret_value(), durable)
+    await tokens.restore()
     if settings.data_mode == "upstox":
         if not settings.upstox_api_key or not settings.upstox_api_secret.get_secret_value():
             log.warning("DATA_MODE=upstox but UPSTOX_API_KEY / UPSTOX_API_SECRET are not set")
@@ -111,6 +116,7 @@ async def lifespan(app: FastAPI):
     app.state.hub = QuoteHub(service)
     app.state.auth = UpstoxAuth(settings, http)
     app.state.oauth_states = {}
+    app.state.token_request_until = 0.0  # epoch seconds while an approval request is outstanding
     app.state.explainer = NvidiaExplainer(settings, http, cache)
     engine = AlertEngine(service, settings)
     engine.listeners.append(app.state.hub.broadcast_alert)
@@ -133,15 +139,56 @@ async def lifespan(app: FastAPI):
             except Exception as exc:  # e.g. Upstox not logged in yet: trained on first request instead
                 log.info("warm-up for %s skipped: %s", tf, exc)
 
-    warmer = asyncio.create_task(warm())
+    warmer = asyncio.create_task(warm()) if settings.warm_up else None
+    keeper = asyncio.create_task(auth_keeper(app, http))
     yield
-    warmer.cancel()
+    if warmer:
+        warmer.cancel()
+    keeper.cancel()
     await news.stop()
     news.store.close()
     await engine.stop()
     await app.state.hub.stop()
     await cache.close()
     await http.aclose()
+
+
+async def auth_keeper(app: FastAPI, http: httpx.AsyncClient) -> None:
+    """Background upkeep: daily Upstox token request (owner approves on the phone) and a keep-alive
+    ping during market hours so free hosting doesn't put the backend to sleep."""
+    last_ping = 0.0
+    last_request: datetime | None = None
+    try:
+        hh, mm = (int(x) for x in settings.upstox_auto_request_time.split(":"))
+        request_at = dtime(hh, mm)
+    except ValueError:
+        request_at = dtime(8, 45)
+    while True:
+        await asyncio.sleep(60)
+        now = now_ist()
+        trading_hours = is_trading_weekday(now.date()) and dtime(8, 0) <= now.time() <= dtime(16, 0)
+        if settings.keepalive_url and trading_hours and time.time() - last_ping >= 600:
+            last_ping = time.time()
+            with contextlib.suppress(httpx.HTTPError):
+                await http.get(settings.keepalive_url, timeout=20)
+        if (settings.upstox_auto_request and settings.data_mode == "upstox" and trading_hours
+                and request_at <= now.time() <= dtime(15, 30)
+                and app.state.tokens.get() is None
+                and (last_request is None or now - last_request >= timedelta(hours=3))):
+            last_request = now
+            try:
+                await start_token_request(app)
+                log.info("Upstox token approval requested automatically; approve it in the Upstox app")
+            except ProviderError as exc:
+                log.warning("automatic Upstox token request failed: %s", exc.message)
+
+
+async def start_token_request(app: FastAPI) -> dict:
+    data = await app.state.auth.request_token()
+    expiry_ms = data.get("authorization_expiry")
+    until = int(expiry_ms) / 1000 if expiry_ms else time.time() + 6 * 3600
+    app.state.token_request_until = until
+    return {"authorization_expiry": datetime.fromtimestamp(until, IST).isoformat(), "notifier_url": data.get("notifier_url")}
 
 
 app = FastAPI(title="AI Stock Intelligence API", version="0.1.0", lifespan=lifespan)
@@ -157,7 +204,7 @@ app.add_middleware(
 async def provider_error_handler(_: Request, exc: ProviderError):
     body = {"error": exc.code, "message": exc.message}
     if exc.http_status == 401:
-        body["login_url"] = "/api/auth/upstox/login"
+        body["owner_action"] = "reconnect_upstox"
     return JSONResponse(status_code=exc.http_status, content=body)
 
 
@@ -173,7 +220,10 @@ async def health(request: Request):
         "status": "ok",
         "data_mode": settings.data_mode,
         "provider": svc(request).provider.name,
-        "upstox": tokens.status() if settings.data_mode == "upstox" else None,
+        "upstox": ({**tokens.status(), "owner_protected": bool(settings.admin_key.get_secret_value()),
+                    "auto_request": settings.upstox_auto_request,
+                    "approval_pending": request.app.state.token_request_until > time.time() and tokens.get() is None}
+                   if settings.data_mode == "upstox" else None),
         "upstox_configured": bool(settings.upstox_api_key and settings.upstox_api_secret.get_secret_value()),
         "cache": request.app.state.cache.backend,
         "nvidia_configured": bool(settings.nvidia_api_key.get_secret_value()),
@@ -194,12 +244,25 @@ async def health(request: Request):
     }
 
 
-@app.get("/api/auth/upstox/login")
-async def upstox_login(request: Request):
+def require_owner(key: str) -> None:
+    """Connecting Upstox is for the site owner only: a visitor's login would replace the token."""
     if settings.data_mode != "upstox":
         raise HTTPException(400, "Set DATA_MODE=upstox to connect Upstox")
     if not settings.upstox_api_key:
         raise HTTPException(500, "UPSTOX_API_KEY is not configured on the backend")
+    expected = settings.admin_key.get_secret_value()
+    if expected and not secrets.compare_digest(key.encode(), expected.encode()):
+        raise HTTPException(403, "Owner key required to connect Upstox")
+
+
+def owner_allowed(user_id: str | None) -> bool:
+    owner = settings.upstox_owner_user_id.strip().upper()
+    return not owner or (user_id or "").strip().upper() == owner
+
+
+@app.get("/api/auth/upstox/login")
+async def upstox_login(request: Request, key: str = ""):
+    require_owner(key)
     states: dict[str, float] = request.app.state.oauth_states
     now = time.time()
     for s, exp in list(states.items()):
@@ -219,13 +282,59 @@ async def upstox_callback(request: Request, code: str = "", state: str = "", err
     if error or not code:
         return RedirectResponse(f"{settings.frontend_origin}/?upstox=denied")
     try:
-        token = await request.app.state.auth.exchange_code(code)
+        body = await request.app.state.auth.exchange_code(code)
     except ProviderError as exc:
         log.warning("Upstox token exchange failed: %s", exc.message)
         return RedirectResponse(f"{settings.frontend_origin}/?{urlencode({'upstox': 'error', 'message': exc.message})}")
-    request.app.state.tokens.set(token)
+    if not owner_allowed(body.get("user_id")):
+        log.warning("refused Upstox login from a non-owner account")
+        msg = "This Upstox account is not the site owner's; the existing connection was kept."
+        return RedirectResponse(f"{settings.frontend_origin}/?{urlencode({'upstox': 'error', 'message': msg})}")
+    await request.app.state.tokens.set(body["access_token"], user_id=body.get("user_id"), user_name=body.get("user_name"))
     log.info("Upstox access token stored (expires %s)", request.app.state.tokens.status()["expires_at"])
     return RedirectResponse(f"{settings.frontend_origin}/?upstox=connected")
+
+
+@app.post("/api/auth/upstox/request")
+async def upstox_token_request(request: Request, key: str = Query("")):
+    """Ask Upstox to send the owner an approval request (Upstox app / web). No browser login or OTP."""
+    require_owner(key)
+    try:
+        return {"status": "requested", **await start_token_request(request.app),
+                "message": "Approve the request in the Upstox app (or the Upstox developer apps page). "
+                           "The token arrives automatically."}
+    except ProviderError as exc:
+        raise HTTPException(502, f"Upstox refused the token request: {exc.message}") from exc
+
+
+@app.post("/api/auth/upstox/notifier")
+async def upstox_notifier(request: Request):
+    """Webhook: Upstox POSTs the approved access token here (set as the Notifier URL on the Upstox app)."""
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(400, "Expected JSON") from None
+    token = payload.get("access_token")
+    if payload.get("message_type", "access_token") != "access_token" or not token:
+        return {"status": "ignored"}
+    if payload.get("client_id") != settings.upstox_api_key:
+        raise HTTPException(403, "Unknown client")
+    if request.app.state.token_request_until < time.time():
+        raise HTTPException(409, "No token request is pending")
+    try:
+        profile = await request.app.state.auth.profile(token)  # proves the token is real and whose it is
+    except ProviderError:
+        raise HTTPException(401, "Token rejected by Upstox") from None
+    user_id = profile.get("user_id") or payload.get("user_id")
+    if not owner_allowed(user_id):
+        raise HTTPException(403, "Token is not from the owner's Upstox account")
+    expires_ms = payload.get("expires_at")
+    expires_at = datetime.fromtimestamp(int(expires_ms) / 1000, IST) if expires_ms else None
+    await request.app.state.tokens.set(token, expires_at=expires_at, user_id=user_id,
+                                       user_name=profile.get("user_name"), source="approval")
+    request.app.state.token_request_until = 0.0
+    log.info("Upstox access token received via approval (expires %s)", request.app.state.tokens.status()["expires_at"])
+    return {"status": "stored"}
 
 
 # ---- market data --------------------------------------------------------

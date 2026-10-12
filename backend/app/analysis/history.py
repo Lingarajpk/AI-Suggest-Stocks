@@ -18,7 +18,10 @@ from app.models import Timeframe
 
 THRESHOLD = 20
 # Forward horizon in bars used to judge each signal point.
-HORIZON = {"1m": (15, "15 minutes"), "5m": (12, "1 hour"), "1d": (5, "5 trading days"), "1h": (7, "about 1 trading day"), "15m": (8, "2 hours")}
+HORIZON = {
+    "1m": (15, "15 minutes"), "3m": (10, "30 minutes"), "5m": (12, "1 hour"), "15m": (8, "2 hours"),
+    "30m": (8, "4 hours"), "1h": (7, "about 1 trading day"), "1d": (5, "5 trading days"), "1w": (4, "4 weeks"),
+}
 
 
 def score_series(df: pd.DataFrame, ind: pd.DataFrame) -> pd.Series:

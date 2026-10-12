@@ -211,3 +211,50 @@ def test_trade_stop_gap_fills_at_open():
     buy = pd.Series([True, False, False], index=df.index)
     trades, _ = simulate_trades(df, ind, buy, pd.Series(False, index=df.index))
     assert trades[0]["reason"] == "stop" and trades[0]["exit_price"] == 90.0  # open, not the 97 stop
+
+
+def test_weekly_candle_completes_at_friday_close():
+    from datetime import datetime
+
+    from app.market_session import IST
+    from app.models import Candle
+    from app.providers.base import drop_incomplete
+
+    week = Candle(time=datetime(2026, 10, 5, tzinfo=IST), open=1, high=2, low=0.5, close=1.5, volume=10)  # Monday
+    thursday = datetime(2026, 10, 8, 15, 45, tzinfo=IST)
+    friday_close = datetime(2026, 10, 9, 15, 31, tzinfo=IST)
+    assert drop_incomplete([week], "1w", thursday) == []
+    assert drop_incomplete([week], "1w", friday_close) == [week]
+
+
+def test_session_buckets_align_to_the_open():
+    from datetime import datetime
+
+    from app.market_session import IST
+    from app.models import Candle
+    from app.providers.base import session_bucket
+
+    def at(h, m):
+        return Candle(time=datetime(2026, 10, 5, h, m, tzinfo=IST), open=1, high=1, low=1, close=1, volume=1)
+
+    b30, b3 = session_bucket(30), session_bucket(3)
+    assert b30(at(9, 15)).strftime("%H:%M") == "09:15"
+    assert b30(at(9, 44)).strftime("%H:%M") == "09:15"
+    assert b30(at(9, 45)).strftime("%H:%M") == "09:45"
+    assert b30(at(15, 29)).strftime("%H:%M") == "15:15"
+    assert b3(at(9, 17)).strftime("%H:%M") == "09:15"
+    assert b3(at(9, 18)).strftime("%H:%M") == "09:18"
+
+
+async def test_demo_serves_every_timeframe():
+    from app.models import is_intraday
+    from app.providers.base import TIMEFRAMES
+    from app.providers.demo import DemoProvider
+
+    p = DemoProvider()
+    inst = (await p.resolve_equities(["TCS"]))[0][0]
+    for tf in TIMEFRAMES:
+        bars = await p.candles(inst, tf)
+        assert len(bars) >= 60, tf
+        assert all(a.time < b.time for a, b in zip(bars, bars[1:])), tf
+    assert not is_intraday("1w") and not is_intraday("1d") and is_intraday("30m")

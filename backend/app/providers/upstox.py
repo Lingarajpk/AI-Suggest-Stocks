@@ -27,6 +27,7 @@ from app.providers.base import (
     ProviderError,
     RateLimited,
     drop_incomplete,
+    to_weekly,
 )
 from app.providers.upstox_instruments import InstrumentMaster
 from app.ratelimit import RateLimiter
@@ -38,8 +39,10 @@ log = logging.getLogger(__name__)
 # timeframe -> (unit, interval, max days per request)
 UPSTOX_INTERVALS: dict[str, tuple[str, int, int]] = {
     "1m": ("minutes", 1, 28),
+    "3m": ("minutes", 3, 28),
     "5m": ("minutes", 5, 28),
     "15m": ("minutes", 15, 28),
+    "30m": ("minutes", 30, 85),
     "1h": ("hours", 1, 85),
     "1d": ("days", 1, 3000),
 }
@@ -124,7 +127,8 @@ class UpstoxAuth:
         }
         return f"{self._settings.upstox_base_url}/v2/login/authorization/dialog?{urlencode(params)}"
 
-    async def exchange_code(self, code: str) -> str:
+    async def exchange_code(self, code: str) -> dict:
+        """Authorization code -> token response ({access_token, user_id, user_name, ...})."""
         resp = await self._http.post(
             f"{self._settings.upstox_base_url}/v2/login/authorization/token",
             data={
@@ -141,7 +145,32 @@ class UpstoxAuth:
         if resp.status_code != 200 or not token:
             errors = body.get("errors") or [{}]
             raise ProviderError("upstox_token_exchange_failed", errors[0].get("message", f"HTTP {resp.status_code}"))
-        return token
+        return body
+
+    async def request_token(self) -> dict:
+        """Access Token Request: Upstox notifies the account holder (app / web) to approve; once
+        approved, Upstox POSTs the token to the notifier URL configured on the Upstox app."""
+        resp = await self._http.post(
+            f"{self._settings.upstox_base_url}/v3/login/auth/token/request/{self._settings.upstox_api_key}",
+            json={"client_secret": self._settings.upstox_api_secret.get_secret_value()},
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+        )
+        body = resp.json() if resp.content else {}
+        if resp.status_code != 200 or body.get("status") != "success":
+            errors = body.get("errors") or [{}]
+            raise ProviderError("upstox_token_request_failed", errors[0].get("message", f"HTTP {resp.status_code}"))
+        return body.get("data") or {}
+
+    async def profile(self, token: str) -> dict:
+        """Who a token belongs to. Also proves the token is real before it is stored."""
+        resp = await self._http.get(
+            f"{self._settings.upstox_base_url}/v2/user/profile",
+            headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+        )
+        body = resp.json() if resp.content else {}
+        if resp.status_code != 200:
+            raise ProviderError("upstox_token_invalid", "Upstox rejected the token", 401)
+        return body.get("data") or {}
 
 
 class UpstoxProvider(MarketDataProvider):
@@ -250,6 +279,9 @@ class UpstoxProvider(MarketDataProvider):
     async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
         """History (cached for the day) merged with today's intraday candles (cached briefly)."""
         spec = TIMEFRAMES[timeframe]
+        if spec.weekly:
+            weekly = to_weekly(await self.candles(instrument, "1d", include_partial=True))
+            return weekly if include_partial else drop_incomplete(weekly, timeframe, now_ist())
         now = now_ist()
         unit, interval, max_span = UPSTOX_INTERVALS[timeframe]
         key = urlquote(instrument.instrument_key, safe="")

@@ -11,7 +11,14 @@ import numpy as np
 
 from app.market_session import IST, SESSION_OPEN, is_session_open, now_ist
 from app.models import Candle, Instrument, Quote, Timeframe
-from app.providers.base import DASHBOARD_INDICES, TIMEFRAMES, MarketDataProvider, drop_incomplete
+from app.providers.base import (
+    DASHBOARD_INDICES,
+    TIMEFRAMES,
+    MarketDataProvider,
+    drop_incomplete,
+    session_bucket,
+    to_weekly,
+)
 from app.sectors import SECTORS
 
 HISTORY_START = date(2023, 1, 2)
@@ -137,15 +144,23 @@ class DemoProvider(MarketDataProvider):
 
     async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
         now = now_ist()
-        bars = self._visible_15m(instrument) if timeframe == "1m" else self._live_15m(instrument)
+        bars = self._visible_15m(instrument) if timeframe in ("1m", "3m") else self._live_15m(instrument)
         cutoff = now - timedelta(days=TIMEFRAMES[timeframe].lookback_days)
         bars = [c for c in bars if c.time >= cutoff]
         if timeframe == "1m":
             out = [m for c in bars for m in _split_minutes(c, _seed(instrument.symbol)) if m.time <= now]
+        elif timeframe == "3m":
+            minutes = [m for c in bars for m in _split_minutes(c, _seed(instrument.symbol)) if m.time <= now]
+            out = _resample(minutes, session_bucket(3))
         elif timeframe == "5m":
             out = self._five_minute(instrument, bars, now)
         elif timeframe == "15m":
             out = bars
+        elif timeframe == "30m":
+            out = _resample(bars, session_bucket(30))
+        elif timeframe == "1w":
+            daily = _resample(bars, lambda c: datetime.combine(c.time.date(), time(0), tzinfo=IST))
+            out = to_weekly(daily)
         elif timeframe == "1h":
             out = _resample(bars, lambda c: c.time.replace(
                 hour=9 + (c.time.hour * 60 + c.time.minute - 555) // 60, minute=15))

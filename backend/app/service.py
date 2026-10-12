@@ -13,7 +13,7 @@ from app.analysis.history import signal_history
 from app.analysis.signals import evaluate
 from app.config import Settings
 from app.market_session import now_ist, session_state
-from app.models import Instrument, Quote, Timeframe
+from app.models import Instrument, Quote, Timeframe, is_intraday
 from app.providers.base import MarketDataProvider, ProviderError, drop_incomplete
 
 log = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class MarketService:
 
         def build():
             df = ta.to_frame(candles)
-            return df, ta.compute(df, intraday=timeframe != "1d")
+            return df, ta.compute(df, intraday=is_intraday(timeframe))
 
         df, ind = self._memoized((inst.instrument_key, timeframe, "frame"), stamp, build)
         return df, ind, stamp

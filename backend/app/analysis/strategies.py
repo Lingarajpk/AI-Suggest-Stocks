@@ -28,6 +28,7 @@ from app.analysis import indicators as ta
 from app.analysis import volume_profile as vp
 from app.analysis.history import simulate_trades
 from app.analysis.signals import MIN_BARS
+from app.models import is_intraday
 
 # key -> (name, kind, description)
 CATALOG: dict[str, tuple[str, str, str]] = {
@@ -242,7 +243,7 @@ def breakout_probability(df: pd.DataFrame, ind: pd.DataFrame) -> tuple[dict[floa
 
 def compute(df: pd.DataFrame, ind: pd.DataFrame, timeframe: str) -> dict:
     """All strategies, candlesticks and order-flow proxies for one instrument's completed candles."""
-    intraday = timeframe != "1d"
+    intraday = is_intraday(timeframe)
     n = len(df)
     swings = ta.confirmed_pivots(df, ind["atr14"])
     idx = df.index

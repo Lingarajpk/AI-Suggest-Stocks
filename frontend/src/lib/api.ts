@@ -23,6 +23,10 @@ export async function fetcher<T>(url: string): Promise<T> {
   }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
+    if ([502, 503, 504].includes(res.status) && !body.error) {
+      // The proxy got no answer: on free hosting the backend sleeps when idle and takes ~30-60 s to wake.
+      throw new ApiError(res.status, "backend_waking", "The data server is waking up or busy. Retrying automatically…");
+    }
     const detail = typeof body.detail === "string" ? body.detail : undefined;
     throw new ApiError(res.status, body.error ?? "http_error", body.message ?? detail ?? `HTTP ${res.status}`, body.login_url);
   }
@@ -31,26 +35,40 @@ export async function fetcher<T>(url: string): Promise<T> {
 
 export const TIMEFRAME_LABEL: Record<Timeframe, string> = {
   "1m": "1-minute",
+  "3m": "3-minute",
   "5m": "5-minute",
   "15m": "15-minute",
+  "30m": "30-minute",
   "1h": "1-hour",
   "1d": "Daily",
+  "1w": "Weekly",
 };
 
+/** Compact tab labels, in the order the chart offers them. */
+export const TIMEFRAME_SHORT: Record<Timeframe, string> = {
+  "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1H", "1d": "1D", "1w": "1W",
+};
+
+/** Bars inside a trading session (session VWAP applies). */
+export const isIntraday = (tf: Timeframe) => tf !== "1d" && tf !== "1w";
+
 export function useHealth() {
-  return useSWR<Health, ApiError>("/api/health", fetcher, { refreshInterval: 30_000 });
+  return useSWR<Health, ApiError>("/api/health", fetcher, {
+    // Poll faster while waiting for the owner to approve an Upstox token, so the page goes live promptly.
+    refreshInterval: (h) => (h?.upstox?.approval_pending ? 5_000 : 30_000),
+  });
 }
 
 export function useScanner(timeframe: Timeframe) {
   return useSWR<ScanResult, ApiError>(`/api/scanner?timeframe=${timeframe}`, fetcher, {
-    refreshInterval: timeframe === "1d" ? 300_000 : 60_000,
+    refreshInterval: isIntraday(timeframe) ? 60_000 : 300_000,
     keepPreviousData: true,
   });
 }
 
 export function useStock(symbol: string, timeframe: Timeframe) {
   return useSWR<StockDetail, ApiError>(`/api/stocks/${encodeURIComponent(symbol)}?timeframe=${timeframe}`, fetcher, {
-    refreshInterval: timeframe === "1d" ? 300_000 : timeframe === "1m" ? 15_000 : timeframe === "5m" ? 20_000 : 60_000,
+    refreshInterval: !isIntraday(timeframe) ? 300_000 : timeframe === "1m" || timeframe === "3m" ? 15_000 : timeframe === "5m" ? 20_000 : 60_000,
     keepPreviousData: true,
   });
 }
