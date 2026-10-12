@@ -52,6 +52,11 @@ interface Props {
   showStrategies: boolean;
   showSupertrend: boolean;
   showVwapBands: boolean;
+  /** Clean-chart switches (all on by default except the RSI/MACD panes). */
+  showEmas?: boolean;
+  showVwap?: boolean;
+  showLevels?: boolean;
+  showIndicators?: boolean;
   /** Still-forming candle, redrawn on every live quote. */
   liveBar: CandleData | null;
 }
@@ -59,6 +64,7 @@ interface Props {
 export function PriceChart({
   candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario, patterns, recentPatterns,
   showPatterns, strategies, showStrategies, showSupertrend, showVwapBands, liveBar,
+  showEmas = true, showVwap = true, showLevels = true, showIndicators = false,
 }: Props) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
@@ -108,13 +114,15 @@ export function PriceChart({
     s.current.st_up = line(C.bull, 0, 2);
     s.current.st_down = line(C.bear, 0, 2);
 
-    s.current.rsi14 = line("#a78bfa", 1, 2);
-    s.current.rsi14.createPriceLine({ price: 70, color: C.bear, lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
-    s.current.rsi14.createPriceLine({ price: 30, color: C.bull, lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
-
-    s.current.macd_hist = c.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, 2);
-    s.current.macd = line(C.ema20, 2);
-    s.current.macd_signal = line(C.ema50, 2);
+    // RSI and MACD panes only when asked for: without them the price chart gets the full height.
+    if (showIndicators) {
+      s.current.rsi14 = line("#a78bfa", 1, 2);
+      s.current.rsi14.createPriceLine({ price: 70, color: C.bear, lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
+      s.current.rsi14.createPriceLine({ price: 30, color: C.bull, lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
+      s.current.macd_hist = c.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, 2);
+      s.current.macd = line(C.ema20, 2);
+      s.current.macd_signal = line(C.ema50, 2);
+    }
 
     markerApi.current = createSeriesMarkers(s.current.candles as ISeriesApi<"Candlestick", UTCTimestamp>, []);
 
@@ -131,7 +139,7 @@ export function PriceChart({
       markerApi.current = null;
       patternSeries.current = [];
     };
-  }, []);
+  }, [showIndicators]);
 
   useEffect(() => {
     const ser = s.current;
@@ -142,9 +150,10 @@ export function PriceChart({
     );
     const pts = (p?: Point[]) => (p ?? []).map((x) => ({ time: t(x.time), value: x.value }));
     for (const k of ["ema20", "ema50", "ema200", "bb_upper", "bb_lower", "vwap"]) ser[k].setData(pts(series[k]));
+    for (const k of ["ema20", "ema50", "ema200"]) ser[k].applyOptions({ visible: showEmas });
     ser.bb_upper.applyOptions({ visible: showBands });
     ser.bb_lower.applyOptions({ visible: showBands });
-    ser.vwap.applyOptions({ visible: intraday });
+    ser.vwap.applyOptions({ visible: intraday && showVwap });
     // Daily/weekly bars have no meaningful clock time: show dates only.
     chart.current.applyOptions({ timeScale: { timeVisible: intraday } });
     for (const k of ["vwap_u1", "vwap_l1", "vwap_u2", "vwap_l2"]) {
@@ -157,19 +166,21 @@ export function PriceChart({
       ser[k].setData(st.map((x) => (x.dir === d ? { time: t(x.time), value: x.value } : { time: t(x.time) })));
       ser[k].applyOptions({ visible: showSupertrend });
     }
-    ser.rsi14.setData(pts(oscillators.rsi14));
-    ser.macd.setData(pts(oscillators.macd));
-    ser.macd_signal.setData(pts(oscillators.macd_signal));
-    ser.macd_hist.setData(
-      (oscillators.macd_hist ?? []).map((x) => ({ time: t(x.time), value: x.value, color: x.value >= 0 ? "rgba(34,197,94,0.5)" : "rgba(240,82,82,0.5)" })),
-    );
+    if (ser.rsi14) {
+      ser.rsi14.setData(pts(oscillators.rsi14));
+      ser.macd.setData(pts(oscillators.macd));
+      ser.macd_signal.setData(pts(oscillators.macd_signal));
+      ser.macd_hist.setData(
+        (oscillators.macd_hist ?? []).map((x) => ({ time: t(x.time), value: x.value, color: x.value >= 0 ? "rgba(34,197,94,0.5)" : "rgba(240,82,82,0.5)" })),
+      );
+    }
 
     const cs = ser.candles as ISeriesApi<"Candlestick">;
     priceLines.current.forEach((pl) => cs.removePriceLine(pl));
     priceLines.current = [];
-    if (support) priceLines.current.push(cs.createPriceLine({ price: support, color: C.bull, lineStyle: LineStyle.Dashed, lineWidth: 1, title: "S" }));
-    if (resistance) priceLines.current.push(cs.createPriceLine({ price: resistance, color: C.bear, lineStyle: LineStyle.Dashed, lineWidth: 1, title: "R" }));
-    if (scenario) {
+    if (showLevels && support) priceLines.current.push(cs.createPriceLine({ price: support, color: C.bull, lineStyle: LineStyle.Dashed, lineWidth: 1, title: "S" }));
+    if (showLevels && resistance) priceLines.current.push(cs.createPriceLine({ price: resistance, color: C.bear, lineStyle: LineStyle.Dashed, lineWidth: 1, title: "R" }));
+    if (showLevels && scenario) {
       const add = (price: number, color: string, title: string, style = LineStyle.Solid) =>
         priceLines.current.push(cs.createPriceLine({ price, color, lineStyle: style, lineWidth: 1, title }));
       const entry = scenario.direction === "long" ? "Buy zone" : "Sell zone";
@@ -264,7 +275,7 @@ export function PriceChart({
     );
   }, [
     candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario, patterns, recentPatterns,
-    showPatterns, strategies, showStrategies, showSupertrend, showVwapBands,
+    showPatterns, strategies, showStrategies, showSupertrend, showVwapBands, showEmas, showVwap, showLevels, showIndicators,
   ]);
 
   // Runs after the data effect above, so the live candle sits on top of the latest setData.
@@ -274,10 +285,10 @@ export function PriceChart({
     const time = t(liveBar.time);
     ser.candles.update({ time, open: liveBar.open, high: liveBar.high, low: liveBar.low, close: liveBar.close });
     ser.volume.update({ time, value: liveBar.volume, color: liveBar.close >= liveBar.open ? "rgba(34,197,94,0.25)" : "rgba(240,82,82,0.25)" });
-  }, [liveBar, candles]);
+  }, [liveBar, candles, showIndicators]);
 
   // Big on every screen: most of the viewport height, within sensible bounds.
-  return <div ref={el} className="h-[68vh] min-h-[440px] max-h-[860px] w-full" />;
+  return <div ref={el} className="h-[72vh] min-h-[460px] max-h-[900px] w-full" />;
 }
 
 export const CHART_LEGEND = [

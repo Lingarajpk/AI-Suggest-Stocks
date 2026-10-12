@@ -23,7 +23,7 @@ function AlertItem({ a }: { a: Alert }) {
   return (
     <li className={`border-l-2 py-2 pl-3 ${DIR_STYLE[a.direction].split(" ")[0]}`}>
       {a.symbol ? (
-        <Link href={`/stock/${a.symbol}`} className="block hover:opacity-80">
+        <Link href={`/stock/${a.symbol.replace(/\s+/g, "")}?tf=5m`} className="block hover:opacity-80">
           {body}
         </Link>
       ) : (

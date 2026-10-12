@@ -11,8 +11,9 @@ from datetime import time as dtime
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.ai.nvidia import NvidiaExplainer
@@ -26,7 +27,9 @@ from app.providers.base import ProviderError
 from app.providers.demo import DemoProvider
 from app.providers.upstox import UpstoxAuth, UpstoxProvider
 from app.service import MarketService
+from app.push import PushSender
 from app.token_store import TokenStore
+from app.watchlists import WatchlistStore, clean_symbols, valid_device
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("app")
@@ -122,6 +125,13 @@ async def lifespan(app: FastAPI):
     engine.listeners.append(app.state.hub.broadcast_alert)
     if settings.telegram_bot_token.get_secret_value() and settings.telegram_chat_id:
         engine.telegram = TelegramNotifier(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, http)
+    watchlists = WatchlistStore(settings.data_dir / "watchlists.json", durable)
+    await watchlists.load()
+    push = PushSender(settings.push_contact, settings.data_dir / "vapid.json", durable,
+                      settings.vapid_public_key, settings.vapid_private_key.get_secret_value())
+    await push.load()
+    app.state.watchlists, app.state.push = watchlists, push
+    engine.watchlists, engine.push = watchlists, push
     app.state.alerts = engine
     engine.start()
     news = NewsService(settings, http, service, NewsStore(settings.data_dir / "news.db"))
@@ -192,6 +202,8 @@ async def start_token_request(app: FastAPI) -> dict:
 
 
 app = FastAPI(title="AI Stock Intelligence API", version="0.1.0", lifespan=lifespan)
+# Chart payloads are large JSON arrays: compressing them is the single biggest speed-up on mobile.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin],
@@ -335,6 +347,75 @@ async def upstox_notifier(request: Request):
     request.app.state.token_request_until = 0.0
     log.info("Upstox access token received via approval (expires %s)", request.app.state.tokens.status()["expires_at"])
     return {"status": "stored"}
+
+
+# ---- watchlists & notifications --------------------------------------------
+def watch_store(request: Request, device: str) -> WatchlistStore:
+    if not valid_device(device):
+        raise HTTPException(400, "Invalid device id")
+    return request.app.state.watchlists
+
+
+@app.get("/api/instruments/search")
+async def search_instruments(request: Request, q: str = Query("", max_length=40)):
+    """Indices and NSE stocks matching a symbol or company name (for adding to a watchlist)."""
+    return {"results": await svc(request).search(q)}
+
+
+@app.get("/api/watchlist/{device}")
+async def get_watchlist(request: Request, device: str):
+    return watch_store(request, device).get(device)
+
+
+@app.put("/api/watchlist/{device}")
+async def put_watchlist(request: Request, device: str, symbols: list[str] = Body(..., embed=True)):
+    """Replace this device's watchlist. Unknown symbols are dropped."""
+    store = watch_store(request, device)
+    resolved = []
+    for sym in symbols[:40]:
+        inst = await svc(request).instrument(sym)
+        if inst is not None:
+            resolved.append(inst.symbol)
+    return {"symbols": await store.set_symbols(device, resolved)}
+
+
+@app.get("/api/watchlist/{device}/calls")
+async def watchlist_calls(request: Request, device: str, s: str = Query("", max_length=800)):
+    """Intraday BUY / SELL / exit call for every stock on this device's watchlist (or the list in `s`,
+    which the page sends so a change shows up before it has synced)."""
+    store = watch_store(request, device)
+    symbols = clean_symbols(s.split(",")) if s else store.get(device)["symbols"]
+    return await svc(request).watchlist_calls(symbols)
+
+
+@app.get("/api/push/key")
+async def push_key(request: Request):
+    return {"public_key": request.app.state.push.public_key}
+
+
+@app.put("/api/watchlist/{device}/push")
+async def put_push(request: Request, device: str, subscription: dict = Body(..., embed=True)):
+    """Turn on phone/desktop notifications for this device's watchlist."""
+    if not isinstance(subscription.get("endpoint"), str) or not subscription["endpoint"].startswith("https://"):
+        raise HTTPException(400, "Invalid push subscription")
+    await watch_store(request, device).set_push(device, subscription)
+    return {"push": True}
+
+
+@app.delete("/api/watchlist/{device}/push")
+async def delete_push(request: Request, device: str):
+    await watch_store(request, device).set_push(device, None)
+    return {"push": False}
+
+
+@app.put("/api/watchlist/{device}/owner")
+async def put_owner(request: Request, device: str, key: str = Query(""), owner: bool = Query(True)):
+    """Mark this device as the owner's: its watchlist decides what is sent to Telegram."""
+    expected = settings.admin_key.get_secret_value()
+    if expected and not secrets.compare_digest(key.encode(), expected.encode()):
+        raise HTTPException(403, "Owner key required")
+    await watch_store(request, device).set_owner(device, owner)
+    return {"owner": owner}
 
 
 # ---- market data --------------------------------------------------------

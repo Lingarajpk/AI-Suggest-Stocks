@@ -239,6 +239,10 @@ class UpstoxProvider(MarketDataProvider):
             )
         return resolved, missing
 
+    async def search(self, query: str, limit: int = 12) -> list[dict]:
+        await self.master.ensure_loaded()
+        return self.master.search(query, limit)
+
     async def resolve_indices(self) -> tuple[list[Instrument], list[str]]:
         await self.master.ensure_loaded()
         resolved, missing = [], []

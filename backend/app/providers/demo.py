@@ -24,6 +24,21 @@ from app.sectors import SECTORS
 HISTORY_START = date(2023, 1, 2)
 HORIZON_DAYS = 365 * 8  # fixed generation horizon so past bars never change from one day to the next
 BARS_PER_DAY = 25  # 09:15-15:30 in 15-minute bars
+# A searchable list for demo mode (any symbol still resolves to synthetic data).
+DEMO_LISTINGS = {
+    "RELIANCE": "Reliance Industries", "TCS": "Tata Consultancy Services", "HDFCBANK": "HDFC Bank",
+    "ICICIBANK": "ICICI Bank", "INFY": "Infosys", "SBIN": "State Bank of India", "BHARTIARTL": "Bharti Airtel",
+    "ITC": "ITC", "LT": "Larsen & Toubro", "KOTAKBANK": "Kotak Mahindra Bank", "AXISBANK": "Axis Bank",
+    "HINDUNILVR": "Hindustan Unilever", "BAJFINANCE": "Bajaj Finance", "MARUTI": "Maruti Suzuki",
+    "SUNPHARMA": "Sun Pharmaceutical", "TATASTEEL": "Tata Steel", "TATAMOTORS": "Tata Motors", "WIPRO": "Wipro",
+    "HCLTECH": "HCL Technologies", "ADANIENT": "Adani Enterprises", "ADANIPORTS": "Adani Ports", "ASIANPAINT": "Asian Paints",
+    "TITAN": "Titan Company", "ULTRACEMCO": "UltraTech Cement", "NTPC": "NTPC", "POWERGRID": "Power Grid",
+    "ONGC": "ONGC", "COALINDIA": "Coal India", "JSWSTEEL": "JSW Steel", "M&M": "Mahindra & Mahindra",
+    "BAJAJFINSV": "Bajaj Finserv", "NESTLEIND": "Nestle India", "TECHM": "Tech Mahindra", "DRREDDY": "Dr Reddy's",
+    "CIPLA": "Cipla", "EICHERMOT": "Eicher Motors", "HEROMOTOCO": "Hero MotoCorp", "GRASIM": "Grasim",
+    "INDUSINDBK": "IndusInd Bank", "HINDALCO": "Hindalco", "BRITANNIA": "Britannia", "ZOMATO": "Zomato",
+    "IRCTC": "IRCTC", "DMART": "Avenue Supermarts", "PIDILITIND": "Pidilite", "VEDL": "Vedanta",
+}
 INDEX_BASE = {"NIFTY 50": 20000.0, "BANK NIFTY": 45000.0, "SENSEX": 66000.0}
 
 
@@ -50,6 +65,12 @@ class DemoProvider(MarketDataProvider):
             )
             for s in symbols
         ], []
+
+    async def search(self, query: str, limit: int = 12) -> list[dict]:
+        q = query.strip().upper()
+        hits = [(0 if s == q else 1 if s.startswith(q) else 2, s, n) for s, n in DEMO_LISTINGS.items()
+                if q and (q in s or q in n.upper())]
+        return [{"symbol": s, "name": f"{n} (demo)", "exchange": "NSE"} for _, s, n in sorted(hits)[:limit]]
 
     async def resolve_indices(self) -> tuple[list[Instrument], list[str]]:
         return [

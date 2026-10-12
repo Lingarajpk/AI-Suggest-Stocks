@@ -15,6 +15,7 @@ from app.config import Settings
 from app.market_session import now_ist, session_state
 from app.models import Instrument, Quote, Timeframe, is_intraday
 from app.providers.base import MarketDataProvider, ProviderError, drop_incomplete
+from app.watchlists import SYMBOL_RE
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +47,8 @@ def _lean(outlook: dict | None, score: float | None, buy_at: float, sell_at: flo
 def _data_issues(sig: dict) -> list[str]:
     return [r for r in sig["no_trade_reasons"] if r.startswith("Only ") or "stale" in r or "quote is" in r]
 
+# Bars sent to the chart (the analysis itself always uses the full history).
+CHART_BARS = {"1m": 750, "3m": 750, "5m": 900, "15m": 800, "30m": 800, "1h": 700, "1d": 750, "1w": 400}
 CHART_SERIES = ("ema20", "ema50", "ema200", "bb_upper", "bb_lower", "vwap", "vwap_u1", "vwap_l1", "vwap_u2", "vwap_l2")
 SNAPSHOT_FIELDS = (
     "ema9", "ema20", "ema50", "ema200", "rsi14", "macd", "macd_signal", "macd_hist", "atr14",
@@ -75,8 +78,13 @@ class MarketService:
         self._strategies: dict[tuple[str, str], tuple[str, int, dict]] = {}
         self._strategy_stats: dict[str, tuple[datetime, dict]] = {}
         self._strategy_lock = asyncio.Lock()
+        # Stocks resolved on demand (watchlists can hold any NSE stock): symbol -> instrument
+        self._extra: dict[str, Instrument] = {}
+        # Intraday calls being followed until they hit target / stop or the signal ends: symbol -> position
+        self._positions: dict[str, dict] = {}
         # symbol -> (intraday verdict, candle it was first seen on, seen since startup only = not a fresh change)
         self._intraday_state: dict[str, tuple[str, str, bool]] = {}
+        self._training: dict[str, asyncio.Task] = {}
         # Work that only changes when a candle completes: (instrument_key, timeframe, part) -> (stamp, value)
         self._memo: dict[tuple, tuple[tuple, object]] = {}
 
@@ -125,7 +133,33 @@ class MarketService:
             return hit
         want = INDEX_ALIASES.get(_norm(symbol), _norm(symbol))
         idx, _ = await self.indices()
-        return next((i for i in idx if _norm(i.symbol) == want), None)
+        found = next((i for i in idx if _norm(i.symbol) == want), None)
+        if found:
+            return found
+        sym = " ".join(symbol.upper().split())
+        if sym in self._extra:
+            return self._extra[sym]
+        if not SYMBOL_RE.match(sym) or " " in sym:
+            return None
+        if self.provider.name == "demo" and not any(h["symbol"] == sym for h in await self.provider.search(sym)):
+            return None  # demo mode makes up prices for anything: only accept its list of real names
+        resolved, _ = await self.provider.resolve_equities([sym])
+        if resolved:
+            self._extra[sym] = resolved[0]
+            return resolved[0]
+        return None
+
+    async def search(self, query: str, limit: int = 12) -> list[dict]:
+        """Indices and NSE stocks matching a symbol or company name."""
+        q = query.strip()
+        if not q:
+            return []
+        idx, _ = await self.indices()
+        nq = _norm(q)
+        hits = [{"symbol": i.symbol, "name": i.name, "exchange": i.exchange, "kind": "index"}
+                for i in idx if nq in _norm(i.symbol) or _norm(i.symbol) in INDEX_ALIASES.get(nq, "")]
+        stocks = await self.provider.search(q, limit)
+        return (hits + [{**s, "kind": "equity"} for s in stocks])[:limit]
 
     async def refresh_quotes(self) -> dict[str, Quote]:
         """One upstream call for universe + indices, shared by REST and WebSocket clients."""
@@ -137,7 +171,9 @@ class MarketService:
                 return self._last_quotes
             equities, _ = await self.universe()
             idx, _ = await self.indices()
-            self._last_quotes = await self.provider.quotes(equities + idx)
+            known = {i.instrument_key for i in equities + idx}
+            extra = [i for i in self._extra.values() if i.instrument_key not in known]
+            self._last_quotes = await self.provider.quotes(equities + idx + extra)
             return self._last_quotes
 
     def cached_quote(self, key: str) -> Quote | None:
@@ -253,6 +289,28 @@ class MarketService:
             out.append((inst, df, ind, await self.detect_patterns(inst, timeframe, df, ind), await self.run_strategies(inst, timeframe, df, ind)))
         return out, errors
 
+    def outlook_model_nowait(self, timeframe: Timeframe) -> tuple[bool, dict | None]:
+        """(ready, model) without waiting: if the model isn't trained yet, training starts in the
+        background so the chart can be shown immediately and the outlook fills in on the next refresh."""
+        hit = self._models.get(timeframe)
+        if hit:
+            if now_ist() - hit[0] >= timedelta(minutes=30):
+                self._train_in_background(timeframe)  # refresh, but keep serving the current model
+            return True, hit[1]
+        self._train_in_background(timeframe)
+        return False, None
+
+    def _train_in_background(self, timeframe: Timeframe) -> None:
+        task = self._training.get(timeframe)
+        if task is None or task.done():
+            self._training[timeframe] = asyncio.create_task(self._train_quietly(timeframe))
+
+    async def _train_quietly(self, timeframe: Timeframe) -> None:
+        try:
+            await self.outlook_model(timeframe)
+        except Exception as exc:  # e.g. not logged in: retried on the next request
+            log.info("background model training for %s failed: %s", timeframe, exc)
+
     async def outlook_model(self, timeframe: Timeframe, max_age: timedelta = timedelta(minutes=30)) -> dict | None:
         """Combined-outlook model trained on every stock's history (time-split tested). Cached."""
         async with self._model_lock:
@@ -320,36 +378,43 @@ class MarketService:
         if with_series:
             # Data-quality NO TRADE reasons (not "weak evidence") also block the combined call.
             issues = [r for r in sig["no_trade_reasons"] if r.startswith("Only ") or "stale" in r or "quote is" in r]
-            built = await self.outlook_model(timeframe)
-            result["outlook"] = pb.outlook(built, pb.features(df, ind, found, strat["features"]), timeframe, not issues, issues)
+            ready, built = self.outlook_model_nowait(timeframe)
+            if ready:
+                result["outlook"] = pb.outlook(built, pb.features(df, ind, found, strat["features"]), timeframe, not issues, issues)
+            else:
+                h, h_label = HORIZON[timeframe]
+                result["outlook"] = {"status": "training", "horizon_bars": h, "horizon_label": h_label,
+                                     "message": "Training the combined model on every stock's history — this fills in within a minute."}
             done = [p for p in found if p["status"] in pt.RESOLVED]
             result["patterns"]["recent"] = done[-30:]
             result["patterns"]["stock_stats"] = pt.merge_stats([pt.raw_stats(found)])
         if with_series:
             result["forming_candle"] = forming.model_dump(mode="json") if forming else None
             result["candles"], result["series"], result["oscillators"] = self._memoized(
-                (inst.instrument_key, timeframe, "chart"), stamp, lambda: self._chart_payload(candles, ind))
+                (inst.instrument_key, timeframe, "chart"), stamp, lambda: self._chart_payload(candles, ind, CHART_BARS.get(timeframe, 800)))
         return result
 
     @staticmethod
-    def _chart_payload(candles: list, ind) -> tuple[list[dict], dict, dict]:
-        def points(name: str) -> list[dict]:
-            return [{"time": t.isoformat(), "value": ta.clean(val)} for t, val in ind[name].items() if ta.clean(val) is not None]
+    def _chart_payload(candles: list, ind, max_bars: int) -> tuple[list[dict], dict, dict]:
+        """The latest `max_bars` candles, and every series as a plain array aligned to them (null where
+        undefined). Far smaller than {time, value} objects; the browser re-attaches the times."""
+        start = max(0, len(candles) - max_bars)
 
-        series = {name: points(name) for name in CHART_SERIES}
-        series["supertrend"] = [
-            {"time": t.isoformat(), "value": ta.clean(val), "dir": int(d)}
-            for (t, val), d in zip(ind["st_line"].items(), ind["st_dir"])
-            if ta.clean(val) is not None and d != 0
-        ]
-        oscillators = {name: points(name) for name in ("rsi14", "macd", "macd_signal", "macd_hist")}
-        return [c.model_dump(mode="json") for c in candles], series, oscillators
+        def values(name: str) -> list[float | None]:
+            return [ta.clean(v) for v in ind[name].iloc[start:]]
+
+        series = {name: values(name) for name in CHART_SERIES}
+        dirs = [int(d) for d in ind["st_dir"].iloc[start:]]
+        series["supertrend"] = [v if d else None for v, d in zip(values("st_line"), dirs)]
+        series["supertrend_dir"] = dirs
+        oscillators = {name: values(name) for name in ("rsi14", "macd", "macd_signal", "macd_hist")}
+        return [c.model_dump(mode="json") for c in candles[start:]], series, oscillators
 
     async def intraday_card(self, inst: Instrument, with_chart: bool) -> dict:
         """Intraday call for one instrument: 5-minute entry timing confirmed by the 15-minute trend."""
         a5 = await self.analyse(inst, ENTRY_TF, with_series=with_chart)
         a15 = await self.analyse(inst, TREND_TF, with_series=False)
-        o5 = a5.get("outlook") if with_chart else await self.technical_outlook(inst, ENTRY_TF)
+        o5 = await self.technical_outlook(inst, ENTRY_TF)
         o15 = await self.technical_outlook(inst, TREND_TF)
         sig5, sig15 = a5["signal"], a15["signal"]
         quote = self.cached_quote(inst.instrument_key)
@@ -397,6 +462,7 @@ class MarketService:
                           "risk_reward": round(2.5 / 1.5, 2), "basis": "ATR(14) on 5-minute candles: stop 1.5 ATR, target 2.5 ATR"}
         states = (a5.get("strategies") or {}).get("strategies") or []
         test5 = (o5 or {}).get("test") or {}
+        position = self._follow(inst.symbol, verdict, levels, price, last_candle)
         card = {
             "instrument": inst.model_dump(),
             "quote": quote.model_dump(mode="json") if quote else None,
@@ -422,21 +488,96 @@ class MarketService:
                             "sell_hit_pct": test5.get("sell_hit_pct"), "sell_calls": test5.get("sell_calls"),
                             "skill_pct": test5.get("skill_pct"), "base_up_pct": test5.get("base_up_pct")},
             "risks": sig5.get("risks", []),
+            "position": position,
+            "action": self._action(verdict, position),
         }
         if with_chart:
             days = sorted({c["time"][:10] for c in a5["candles"]})[-CHART_SESSIONS:]
             first = f"{days[0]}T00:00" if days else ""
-
-            def keep(rows: list[dict]) -> list[dict]:
-                return [r for r in rows if r["time"] >= first]
-
+            cut = next((i for i, c in enumerate(a5["candles"]) if c["time"] >= first), 0)
             card["chart"] = {
-                "candles": keep(a5["candles"]),
+                "candles": a5["candles"][cut:],
                 "forming_candle": a5.get("forming_candle"),
-                "series": {k: keep(a5["series"].get(k, [])) for k in ("vwap", "vwap_u1", "vwap_l1", "supertrend", "ema20")},
-                "markers": keep((a5.get("history") or {}).get("markers") or []),
+                "series": {k: a5["series"].get(k, [])[cut:]
+                           for k in ("vwap", "vwap_u1", "vwap_l1", "supertrend", "supertrend_dir", "ema20")},
+                "markers": [m for m in (a5.get("history") or {}).get("markers") or [] if m["time"] >= first],
             }
         return card
+
+    def _follow(self, symbol: str, verdict: str, levels: dict | None, price: float | None, candle: str | None) -> dict | None:
+        """Track the latest BUY/SELL call like a trade so the app can say when to get out: target
+        reached, stop-loss hit, or the signal ended (the two timeframes no longer agree)."""
+        pos = self._positions.get(symbol)
+        if pos and pos["opened"][:10] != (candle or "")[:10]:
+            pos = None  # intraday calls don't carry over to the next session
+        # 1. Manage the open call.
+        if pos and pos["status"] == "open" and price:
+            long = pos["side"] == "BUY"
+            if price >= pos["target"] if long else price <= pos["target"]:
+                reason = "target"
+            elif price <= pos["stop"] if long else price >= pos["stop"]:
+                reason = "stop"
+            elif verdict != pos["side"]:
+                reason = "signal_ended"
+            else:
+                reason = None
+            if reason:
+                pos = {**pos, "status": reason, "exit_price": round(price, 2), "closed": candle,
+                       "pnl_pct": round((price / pos["entry"] - 1) * 100 * (1 if long else -1), 2)}
+        # 2. After an exit, a new call on the same side needs the signal to reset first.
+        if pos and pos["status"] != "open" and verdict != pos["side"]:
+            pos = {**pos, "rearmed": True}
+        # 3. Open a new call.
+        if verdict in ("BUY", "SELL") and levels and price and (
+                pos is None or (pos["status"] != "open" and (pos["side"] != verdict or pos.get("rearmed")))):
+            prev = None if pos is None else {k: v for k, v in pos.items() if k != "previous"}
+            pos = {"side": verdict, "entry": round(price, 2), "target": levels["target"], "stop": levels["stop"],
+                   "opened": candle or now_ist().isoformat(), "status": "open", "exit_price": None, "closed": None,
+                   "pnl_pct": None, "previous": prev}
+        if pos is None:
+            self._positions.pop(symbol, None)
+        else:
+            self._positions[symbol] = pos
+        return pos
+
+    @staticmethod
+    def _action(verdict: str, pos: dict | None) -> dict:
+        """One plain instruction: BUY / SELL / HOLD the open call / SELL NOW to exit / WAIT."""
+        if pos and pos["status"] == "open":
+            if pos["side"] == "BUY":
+                return {"label": "HOLD BUY", "tone": "bull", "text": f"Bought at {pos['entry']:,.2f}: sell at target "
+                        f"{pos['target']:,.2f}, or at the stop {pos['stop']:,.2f}."}
+            return {"label": "HOLD SELL", "tone": "bear", "text": f"Sold at {pos['entry']:,.2f}: buy back at target "
+                    f"{pos['target']:,.2f}, or at the stop {pos['stop']:,.2f}."}
+        if pos and pos["status"] in ("target", "stop", "signal_ended"):
+            what = {"target": "target reached", "stop": "stop-loss hit", "signal_ended": "the signal ended"}[pos["status"]]
+            word = "SELL NOW" if pos["side"] == "BUY" else "BUY BACK NOW"
+            return {"label": word, "tone": "warn", "text": f"Exit the {pos['side']} from {pos['entry']:,.2f}: {what} at "
+                    f"{pos['exit_price']:,.2f} ({pos['pnl_pct']:+.2f}% before costs)."}
+        if verdict == "BUY":
+            return {"label": "BUY", "tone": "bull", "text": "Both timeframes point up."}
+        if verdict == "SELL":
+            return {"label": "SELL", "tone": "bear", "text": "Both timeframes point down."}
+        return {"label": verdict, "tone": "muted", "text": "No trade right now."}
+
+    async def watchlist_calls(self, symbols: list[str]) -> dict:
+        """Intraday call (and position) for every symbol on a watchlist."""
+        sem = asyncio.Semaphore(4)
+
+        async def one(sym: str) -> dict:
+            inst = await self.instrument(sym)
+            if inst is None:
+                return {"symbol": sym, "error": "Not found on NSE"}
+            try:
+                async with sem:
+                    return {"symbol": sym, **await self.intraday_card(inst, with_chart=False)}
+            except ProviderError as exc:
+                if exc.http_status == 401:
+                    raise
+                return {"symbol": sym, "instrument": inst.model_dump(), "error": exc.message}
+
+        rows = await asyncio.gather(*(one(s) for s in symbols))
+        return {"generated_at": now_ist().isoformat(), "source": self.provider.name, "session": session_state(), "rows": rows}
 
     async def intraday(self, include_stocks: bool = True) -> dict:
         """Intraday desk: NIFTY 50 / BANK NIFTY / SENSEX first, then stocks with a live BUY/SELL."""

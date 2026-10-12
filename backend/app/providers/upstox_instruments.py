@@ -68,6 +68,32 @@ class InstrumentMaster:
                     return r
         return None
 
+    def search(self, query: str, limit: int = 12) -> list[dict]:
+        """NSE equities whose symbol or company name matches, best matches first."""
+        q = _norm(query)
+        if not q:
+            return []
+        scored = []
+        for r in self._records:
+            if r.get("segment") != "NSE_EQ" or r.get("instrument_type") not in (None, "EQ"):
+                continue
+            sym, name = _norm(r.get("trading_symbol")), _norm(r.get("name"))
+            if sym == q:
+                rank = 0
+            elif sym.startswith(q):
+                rank = 1
+            elif name.startswith(q):
+                rank = 2
+            elif q in name:
+                rank = 3
+            elif q in sym:
+                rank = 4
+            else:
+                continue
+            scored.append((rank, len(sym), sym, name))
+        scored.sort()
+        return [{"symbol": sym, "name": name.title(), "exchange": "NSE"} for _, _, sym, name in scored[:limit]]
+
     def find_index(self, label: str) -> dict | None:
         segment, candidates = INDEX_CANDIDATES[label]
         pool = [r for r in self._records if r.get("segment") == segment]

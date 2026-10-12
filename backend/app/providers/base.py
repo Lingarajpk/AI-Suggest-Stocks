@@ -118,5 +118,9 @@ class MarketDataProvider(ABC):
     async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
         """Candles oldest first. The still-forming last candle is included only if include_partial."""
 
+    async def search(self, query: str, limit: int = 12) -> list[dict]:
+        """Equities matching a symbol or company-name query: [{symbol, name, exchange}]."""
+        return []
+
     async def close(self) -> None:
         return None

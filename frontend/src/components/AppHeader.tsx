@@ -48,6 +48,7 @@ export function AppHeader({
           <nav className="flex rounded-lg border border-line bg-panel-2 p-0.5 text-xs font-medium">
             {[
               ["/", "Intraday"],
+              ["/watchlist", "Watchlist"],
               ["/dashboard", "Dashboard"],
             ].map(([href, label]) => (
               <Link

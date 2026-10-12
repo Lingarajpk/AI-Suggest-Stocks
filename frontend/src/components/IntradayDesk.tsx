@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
-import { ArrowDownRight, ArrowUpRight, Clock, Maximize2, Zap } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ArrowDownRight, ArrowUpRight, Calculator, Clock, Maximize2, Zap } from "lucide-react";
 import { useHealth, useIntraday } from "@/lib/api";
 import { changeColor, fmtPct, fmtPrice, fmtSigned, fmtTime } from "@/lib/format";
 import { buildLiveBar } from "@/lib/liveBar";
@@ -13,6 +13,7 @@ import { Disclaimer } from "./Disclaimer";
 import { IntradayChart } from "./IntradayChart";
 import { MarketNews } from "./NewsPanel";
 import { StatusNotices } from "./StatusNotices";
+import { TradeCalculator } from "./TradeCalculator";
 import { FreshnessBadge, Panel } from "./ui";
 
 const VERDICT: Record<IntradayVerdict, { label: string; text: string; ring: string; chip: string }> = {
@@ -64,6 +65,7 @@ function Leg({ leg, label }: { leg: IntradayLeg; label: string }) {
 
 function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null }) {
   const sym = card.instrument.symbol;
+  const [calc, setCalc] = useState(false);
   const liveBar = useMemo(
     () => (card.chart ? buildLiveBar("5m", card.chart.forming_candle, card.chart.candles.at(-1), quote) : null),
     [card.chart, quote],
@@ -133,6 +135,24 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
         </dl>
       ) : (
         <p className="mt-3 rounded-md bg-panel-2/60 px-3 py-2 text-xs text-muted">No entry, target or stop: wait for both timeframes to agree.</p>
+      )}
+      {card.action && card.action.label !== card.verdict && (
+        <p className={`mt-2 rounded-md px-3 py-2 text-xs font-semibold ${card.action.tone === "warn" ? "bg-warn/15 text-warn" : card.action.tone === "bull" ? "bg-bull/10 text-bull" : "bg-bear/10 text-bear"}`}>
+          {card.action.label}: {card.action.text}
+        </p>
+      )}
+      {lv && (
+        <button onClick={() => setCalc((v) => !v)} className="mt-2 inline-flex items-center gap-1 self-start text-xs font-semibold text-accent hover:underline">
+          <Calculator className="size-3.5" /> {calc ? "Hide calculator" : "Position size & charges"}
+        </button>
+      )}
+      {calc && lv && (card.verdict === "BUY" || card.verdict === "SELL") && (
+        <div className="mt-2">
+          <TradeCalculator
+            setup={{ symbol: sym, side: card.verdict, entry: +((lv.entry_low + lv.entry_high) / 2).toFixed(2), stop: lv.stop, target: lv.target, source: "this intraday call" }}
+            onClose={() => setCalc(false)}
+          />
+        </div>
       )}
 
       <div className="mt-3 -mx-1">
