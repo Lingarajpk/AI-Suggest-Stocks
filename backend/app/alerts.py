@@ -4,7 +4,11 @@ Runs on the backend independently of any open browser. Three kinds of alert:
   * signal  - a new BUY/SELL signal point on a just-completed candle (default 15m)
   * level   - the day's change crosses a threshold (default +/-2% and +/-4%), once per day
   * fast    - price moves >= FAST_MOVE_PCT within FAST_WINDOW minutes (with a cooldown)
-  * intraday- NIFTY 50 / BANK NIFTY / SENSEX turn BUY or SELL (5-minute entry confirmed by 15-minute trend)
+  * intraday- an index or a watchlist stock turns BUY or SELL (5-minute entry confirmed by 15-minute trend)
+  * trade   - when to get out of that call: target reached, stop-loss hit, or the signal ended
+
+Intraday and trade alerts for a stock go by web push to the devices that watch it, and to Telegram
+when the stock is on the owner's watchlist (or to Telegram for everything if no owner device is set).
 
 Every alert is kept in memory (recent history), pushed to browsers over the WebSocket,
 and optionally sent to Telegram.
@@ -28,6 +32,8 @@ from app.service import MarketService
 
 log = logging.getLogger(__name__)
 Listener = Callable[[dict], Awaitable[None]]
+PUSH_KINDS = ("intraday", "trade", "test")
+EXIT_TEXT = {"target": "target reached", "stop": "stop-loss hit", "signal_ended": "signal ended"}
 
 
 class TelegramNotifier:
@@ -61,6 +67,8 @@ class AlertEngine:
         self.alerts: deque[dict] = deque(maxlen=200)
         self.listeners: list[Listener] = []
         self.telegram: TelegramNotifier | None = None
+        self.watchlists = None  # WatchlistStore: which devices watch which symbols
+        self.push = None  # PushSender
         # Clock-seeded so ids keep increasing across restarts (the browser dedupes and counts unread by id).
         self._ids = itertools.count(int(time.time() * 1000))
         self._fired: dict[str, datetime] = {}
@@ -208,27 +216,55 @@ class AlertEngine:
             )
 
     async def check_intraday(self) -> None:
-        """Alert when an index's intraday call turns BUY or SELL on a just-completed 5-minute candle."""
+        """Intraday calls for the indices and every watchlist stock: alert on a fresh BUY/SELL, and
+        again when it's time to exit (target, stop-loss, or the signal ended)."""
         now = self.clock()
         desk = await self.service.intraday(include_stocks=False)
-        for card in desk["indices"]:
-            if "error" in card or card["verdict"] not in ("BUY", "SELL"):
-                continue
-            if not card["since_known"] or card["since"] != card["last_candle_time"] or self.candle_too_old(card["since"], desk["entry_timeframe"], now):
-                continue  # only the candle on which the call changed
-            sym = card["instrument"]["symbol"]
-            buy = card["verdict"] == "BUY"
-            lv = card.get("levels") or {}
-            levels = (f" Entry {lv['entry_low']:,.2f}-{lv['entry_high']:,.2f}, target {lv['target']:,.2f}, stop {lv['stop']:,.2f}."
-                      if lv else "")
-            up = card["entry"].get("up_pct")
-            odds = f" 5-min up probability {up:.0f}%." if up is not None else ""
-            q = self.service.cached_quote(card["instrument"]["instrument_key"])
-            await self._emit_once(
-                f"intraday:{sym}:{card['verdict']}:{card['since']}", "up" if buy else "down",
-                f"{'▲ INTRADAY BUY' if buy else '▼ INTRADAY SELL'}: {sym}",
-                f"{sym} at {card['price']:,.2f}. {card['reason']}{odds}{levels}", sym, q,
-            )
+        cards = [c for c in desk["indices"] if "error" not in c]
+        index_names = {c["instrument"]["symbol"] for c in cards}
+        watched = [s for s in (self.watchlists.all_symbols() if self.watchlists else []) if s not in index_names]
+        if watched:
+            calls = await self.service.watchlist_calls(watched)
+            cards += [r for r in calls["rows"] if "error" not in r]
+        for card in cards:
+            await self._exit_alert(card, desk["entry_timeframe"], now)
+            await self._entry_alert(card, desk["entry_timeframe"], now)
+
+    async def _exit_alert(self, card: dict, tf: str, now: datetime) -> None:
+        pos = card.get("position")
+        closed = pos if pos and pos["status"] != "open" else (pos or {}).get("previous")
+        if not closed or closed.get("status") == "open" or self.candle_too_old(closed.get("closed"), tf, now):
+            return
+        sym = card["instrument"]["symbol"]
+        long = closed["side"] == "BUY"
+        good = closed["status"] == "target"
+        word = "SELL NOW" if long else "BUY BACK NOW"
+        q = self.service.cached_quote(card["instrument"]["instrument_key"])
+        await self._emit_once(
+            f"trade:{sym}:{closed['opened']}", "down" if long else "up",
+            f"{'✅' if good else '⛔' if closed['status'] == 'stop' else '⚠'} {word}: {sym} — {EXIT_TEXT[closed['status']]}",
+            f"Exit the intraday {closed['side']} from {closed['entry']:,.2f}: {sym} is at {closed['exit_price']:,.2f} "
+            f"({closed['pnl_pct']:+.2f}% before costs).", sym, q,
+        )
+
+    async def _entry_alert(self, card: dict, tf: str, now: datetime) -> None:
+        if card["verdict"] not in ("BUY", "SELL"):
+            return
+        if not card["since_known"] or card["since"] != card["last_candle_time"] or self.candle_too_old(card["since"], tf, now):
+            return  # only the candle on which the call changed
+        sym = card["instrument"]["symbol"]
+        buy = card["verdict"] == "BUY"
+        lv = card.get("levels") or {}
+        levels = (f" Entry {lv['entry_low']:,.2f}-{lv['entry_high']:,.2f}, target {lv['target']:,.2f}, stop {lv['stop']:,.2f}."
+                  if lv else "")
+        up = card["entry"].get("up_pct")
+        odds = f" 5-min up probability {up:.0f}%." if up is not None else ""
+        q = self.service.cached_quote(card["instrument"]["instrument_key"])
+        await self._emit_once(
+            f"intraday:{sym}:{card['verdict']}:{card['since']}", "up" if buy else "down",
+            f"{'▲ BUY' if buy else '▼ SELL'} now: {sym} (intraday)",
+            f"{sym} at {card['price']:,.2f}. {card['reason']}{odds}{levels}", sym, q,
+        )
 
     async def _check_trade(self, row: dict, sig: dict, hist: dict, tf: str, now: datetime) -> None:
         """Exit and early-warning alerts for the trade opened by a BUY/SELL signal."""
@@ -342,8 +378,24 @@ class AlertEngine:
                 await listener(alert)
             except Exception:
                 log.exception("alert listener failed")
-        if self.telegram:
+        if self.telegram and self._telegram_wants(alert):
             await self.telegram.send(alert)
+        if self.push and self.watchlists and alert["kind"] in PUSH_KINDS:
+            await self._push(alert)
+
+    def _telegram_wants(self, alert: dict) -> bool:
+        """Owner's watchlist first: with an owner device set, Telegram only gets its stocks (plus system alerts)."""
+        owned = self.watchlists.owner_symbols() if self.watchlists else None
+        return owned is None or alert["symbol"] is None or alert["symbol"] in owned
+
+    async def _push(self, alert: dict) -> None:
+        sym = alert["symbol"]
+        targets = (self.watchlists.push_everyone() if sym is None else self.watchlists.push_targets(sym))
+        payload = {"title": alert["title"], "body": alert["message"], "tag": f"ai-stock-{alert['kind']}-{sym or 'all'}",
+                   "url": f"/stock/{sym.replace(' ', '')}?tf=5m" if sym else "/watchlist"}
+        for device, sub in targets:
+            if not await self.push.send(sub, payload):
+                await self.watchlists.set_push(device, None)  # subscription expired or revoked
 
     async def send_test(self) -> dict:
         """Clearly-labelled test alert to check pop-ups, sound and Telegram."""

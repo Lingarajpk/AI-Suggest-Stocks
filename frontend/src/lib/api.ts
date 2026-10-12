@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import type { Health, IntradayDesk, NewsFeed, PatternStatsResult, ScanResult, StockDetail, StockNews, StrategyStatsResult, Timeframe, TodayResult } from "./types";
+import type { CandleData, Health, IntradayDesk, Point, SearchResult, WatchCall, NewsFeed, PatternStatsResult, ScanResult, StockDetail, StockNews, StrategyStatsResult, Timeframe, TodayResult } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -66,16 +66,78 @@ export function useScanner(timeframe: Timeframe) {
   });
 }
 
+type CompactSeries = Record<string, (number | null)[]>;
+
+/** The API sends each series as an array aligned to the candles (much smaller than {time, value}
+ * objects); rebuild the points the charts use. Supertrend points also carry their direction. */
+function expandSeries(candles: CandleData[], compact: CompactSeries | undefined): Record<string, Point[]> {
+  const out: Record<string, Point[]> = {};
+  const dirs = compact?.supertrend_dir;
+  for (const [name, values] of Object.entries(compact ?? {})) {
+    if (name === "supertrend_dir") continue;
+    const pts: Point[] = [];
+    values.forEach((v, i) => {
+      const c = candles[i];
+      if (v == null || !c) return;
+      pts.push(name === "supertrend" ? { time: c.time, value: v, dir: dirs?.[i] ?? 0 } : { time: c.time, value: v });
+    });
+    out[name] = pts;
+  }
+  return out;
+}
+
+async function fetchStock(url: string): Promise<StockDetail> {
+  const d = await fetcher<StockDetail & { series: CompactSeries; oscillators: CompactSeries }>(url);
+  const first = d.candles[0]?.time ?? "";
+  const h = d.history;
+  return {
+    ...d,
+    series: expandSeries(d.candles, d.series as unknown as CompactSeries),
+    oscillators: expandSeries(d.candles, d.oscillators as unknown as CompactSeries),
+    // The chart only carries recent candles: drop older markers so they don't point at missing bars.
+    history: h && { ...h, markers: h.markers?.filter((m) => m.time >= first), exits: h.exits?.filter((x) => x.entry_time >= first) },
+  };
+}
+
+async function fetchIntraday(url: string): Promise<IntradayDesk> {
+  const d = await fetcher<IntradayDesk>(url);
+  return {
+    ...d,
+    indices: d.indices.map((c) =>
+      c.chart ? { ...c, chart: { ...c.chart, series: expandSeries(c.chart.candles, c.chart.series as unknown as CompactSeries) } } : c,
+    ),
+  };
+}
+
 export function useStock(symbol: string, timeframe: Timeframe) {
-  return useSWR<StockDetail, ApiError>(`/api/stocks/${encodeURIComponent(symbol)}?timeframe=${timeframe}`, fetcher, {
-    refreshInterval: !isIntraday(timeframe) ? 300_000 : timeframe === "1m" || timeframe === "3m" ? 15_000 : timeframe === "5m" ? 20_000 : 60_000,
+  const normal = !isIntraday(timeframe) ? 300_000 : timeframe === "1m" || timeframe === "3m" ? 15_000 : timeframe === "5m" ? 20_000 : 60_000;
+  return useSWR<StockDetail, ApiError>(`/api/stocks/${encodeURIComponent(symbol)}?timeframe=${timeframe}`, fetchStock, {
+    // While the combined model trains in the background, check back quickly so the outlook appears.
+    refreshInterval: (d) => (d?.model_outlook?.status === "training" ? 4_000 : normal),
     keepPreviousData: true,
+  });
+}
+
+/** BUY / SELL / exit calls for this device's watchlist (refetched when the list changes). */
+export function useWatchCalls(device: string, symbols: string[]) {
+  const key = device && symbols.length ? `/api/watchlist/${device}/calls?s=${encodeURIComponent(symbols.join(","))}` : null;
+  return useSWR<{ generated_at: string; session: string; rows: WatchCall[] }, ApiError>(key, fetcher, {
+    refreshInterval: 20_000,
+    keepPreviousData: true,
+  });
+}
+
+export function useSearch(query: string) {
+  const q = query.trim();
+  return useSWR<{ results: SearchResult[] }, ApiError>(q ? `/api/instruments/search?q=${encodeURIComponent(q)}` : null, fetcher, {
+    keepPreviousData: true,
+    dedupingInterval: 30_000,
   });
 }
 
 /** Intraday desk: index BUY/SELL calls (5-min entry, 15-min trend) and stocks with a live call. */
 export function useIntraday() {
-  return useSWR<IntradayDesk, ApiError>("/api/intraday", fetcher, { refreshInterval: 20_000, keepPreviousData: true });
+  return useSWR<IntradayDesk, ApiError>("/api/intraday", fetchIntraday, { refreshInterval: 20_000, keepPreviousData: true });
 }
 
 /** Per-pattern success rates measured across the whole universe (the pattern "training"). */

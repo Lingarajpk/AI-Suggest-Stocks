@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     upstox_auto_request_time: str = "08:45"  # IST, trading days
     # Optional: this backend's public health URL, pinged during market hours so free hosting doesn't sleep.
     keepalive_url: str = ""
+    # Web push (phone/desktop notifications). Keys are generated and stored automatically if blank.
+    vapid_public_key: str = ""
+    vapid_private_key: SecretStr = SecretStr("")
+    push_contact: str = "mailto:alerts@ai-stock.invalid"
     # Train models at startup (turned off in tests).
     warm_up: bool = True
     upstox_instruments_url: str = (

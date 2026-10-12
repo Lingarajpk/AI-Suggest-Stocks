@@ -4,6 +4,18 @@ from fastapi.testclient import TestClient
 from app.analysis import probability as pb
 
 
+def get_detail(client, path: str, timeout: float = 90.0) -> dict:
+    """Stock detail once the combined model has trained (the first request returns 'training')."""
+    import time
+
+    deadline = time.time() + timeout
+    while True:
+        d = client.get(path).json()
+        if (d.get("model_outlook") or {}).get("status") != "training" or time.time() > deadline:
+            return d
+        time.sleep(0.5)
+
+
 @pytest.fixture(scope="module")
 def client(tmp_path_factory, monkeypatch_module):
     monkeypatch_module.setenv("DATA_MODE", "demo")
@@ -40,7 +52,7 @@ def test_scanner_and_detail(client):
     assert scan["scanned"] == len(scan["rows"]) >= 10
     assert all(r["quote"]["source"] == "demo" for r in scan["rows"])
 
-    detail = client.get("/api/stocks/RELIANCE?timeframe=15m").json()
+    detail = get_detail(client, "/api/stocks/RELIANCE?timeframe=15m")
     assert detail["candles"] and detail["signal"]["method"] == "rule_based_technical_v1"
     o = detail["model_outlook"]
     assert o["status"] == "ok" and o["verdict"] in ("BUY", "SELL", "HOLD", "NO EDGE", "NO TRADE")
@@ -68,7 +80,7 @@ def test_today_outlook(client):
         assert "win_rate" in item["track_record"]
     for item in body["downside"]:
         assert item["daily_score"] < 0
-    detail = client.get("/api/stocks/TCS?timeframe=1d").json()
+    detail = get_detail(client, "/api/stocks/TCS?timeframe=1d")
     assert "markers" in detail["history"]
 
 
@@ -81,7 +93,7 @@ def test_alerts_and_movers_endpoints(client):
 
 
 def test_one_minute_chart_and_forming_candle(client):
-    d = client.get("/api/stocks/INFY?timeframe=1m").json()
+    d = get_detail(client, "/api/stocks/INFY?timeframe=1m")
     assert d["timeframe"] == "1m" and len(d["candles"]) > 100
     assert "forming_candle" in d
     if d["forming_candle"]:
@@ -89,7 +101,7 @@ def test_one_minute_chart_and_forming_candle(client):
 
 
 def test_patterns_in_detail_and_stats(client):
-    d = client.get("/api/stocks/RELIANCE?timeframe=1d").json()
+    d = get_detail(client, "/api/stocks/RELIANCE?timeframe=1d")
     pats = d["patterns"]
     assert set(pats) >= {"current", "recent", "stock_stats"}
     for p in pats["recent"]:
@@ -102,7 +114,7 @@ def test_patterns_in_detail_and_stats(client):
 
 
 def test_strategies_in_detail_and_stats(client):
-    d = client.get("/api/stocks/RELIANCE?timeframe=15m").json()
+    d = get_detail(client, "/api/stocks/RELIANCE?timeframe=15m")
     st = d["strategies"]
     assert {s["key"] for s in st["strategies"]} >= {"trend_momentum", "liquidity_sweep", "fvg", "ifvg", "amd", "breakout_prob"}
     assert set(st) >= {"breakout", "candles", "volume_profile", "macd", "fvg_zones", "markers"}
@@ -110,7 +122,7 @@ def test_strategies_in_detail_and_stats(client):
     test = d["model_outlook"]["test"]
     assert test["features_used"][:9] == list(pb.FEATURES.values())
     assert set(test["features_dropped"]).isdisjoint(test["features_used"])
-    daily = client.get("/api/stocks/RELIANCE?timeframe=1d").json()
+    daily = get_detail(client, "/api/stocks/RELIANCE?timeframe=1d")
     amd = next(s for s in daily["strategies"]["strategies"] if s["key"] == "amd")
     assert amd["state"] == "n/a"
     stats = client.get("/api/strategies/stats?timeframe=15m").json()

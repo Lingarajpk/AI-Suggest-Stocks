@@ -203,4 +203,4 @@ async def test_intraday_index_alert_only_on_a_fresh_change(engine):
     for _ in range(3):
         await eng.check_intraday()
     got = [a for a in received if a["kind"] == "intraday"]
-    assert len(got) == 1 and "INTRADAY BUY" in got[0]["title"] and "target 25,100.00" in got[0]["message"]
+    assert len(got) == 1 and "BUY now" in got[0]["title"] and "target 25,100.00" in got[0]["message"]

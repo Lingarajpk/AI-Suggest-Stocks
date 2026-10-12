@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { showNotification } from "./notify";
+import { currentWatchlist } from "./watchlist";
 import type { Alert, Quote } from "./types";
 
 export type StreamStatus = "connecting" | "open" | "reconnecting" | "error";
@@ -15,6 +16,11 @@ interface StreamState {
   alerts: Alert[];
   /** Newest alert received live on this page (not from the initial history load). */
   latestAlert: Alert | null;
+}
+
+export function isPriority(a: Alert): boolean {
+  const list = currentWatchlist();
+  return list.length === 0 || a.symbol == null || list.includes(a.symbol) || a.kind === "test" || a.kind === "auth";
 }
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/quotes";
@@ -52,8 +58,12 @@ export function useQuoteStream(): StreamState {
         } else if (msg.type === "alert") {
           const a = msg.alert as Alert;
           setAlerts((list) => (list.some((x) => x.id === a.id) ? list : [a, ...list].slice(0, 100)));
-          setLatestAlert(a);
-          showNotification(a);
+          // Watchlist first: only its stocks (and system/test alerts) pop up and make a sound;
+          // everything else just goes into the bell. With an empty watchlist, everything pops up.
+          if (isPriority(a)) {
+            setLatestAlert(a);
+            showNotification(a);
+          }
         } else if (msg.type === "error") {
           setState((s) => ({ ...s, error: msg.message }));
         }

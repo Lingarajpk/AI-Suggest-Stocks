@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
+import { pushEnabled } from "./push";
 import type { Alert } from "./types";
 
 // Per-browser preference: show desktop notifications + sound for live alerts.
@@ -75,13 +76,18 @@ export function beep(direction: Alert["direction"]) {
 
 export function showNotification(alert: Alert) {
   if (!readEnabled()) return;
+  // With push on, the service worker already shows this alert as a system notification: just chime.
+  if (pushEnabled() && alert.kind !== "test") {
+    beep(alert.direction);
+    return;
+  }
   try {
     const n = new Notification(alert.title, { body: alert.message, tag: `ai-stock-${alert.id}` });
     n.onclick = () => {
       window.focus();
       // Fired outside React (OS notification click), so the router isn't available here.
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-      if (alert.symbol) window.location.href = `/stock/${alert.symbol}`;
+      if (alert.symbol) window.location.href = `/stock/${alert.symbol.replace(/\s+/g, "")}?tf=5m`;
     };
     beep(alert.direction);
   } catch {

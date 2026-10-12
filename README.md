@@ -22,6 +22,8 @@ An API-first stock analysis platform for Indian equities (NSE/BSE). It has a Fas
 | Candlesticks: Doji, Hammer, Shooting Star, Engulfing, Morning/Evening Star, Inside Bar (trend-context aware), backtested the same way | ✅ |
 | Order flow (proxy): volume profile (POC, 70% value area), delta and CVD estimated from candles, CVD divergence. Footprint, absorption and stacked imbalances need tick data that NSE/Upstox does not provide | ⚠️ estimated |
 | Intraday desk (home page): NIFTY 50 / BANK NIFTY / SENSEX BUY / SELL / WAIT from the 5-minute outlook confirmed by the 15-minute trend, with entry, target, stop and a live 5-minute chart; stocks with a live intraday call below; alert when an index call turns BUY or SELL | ✅ |
+| Watchlist (any NSE stock, per device): BUY / SELL / exit calls ("SELL NOW — target reached") with notifications by in-app pop-up, web push (phone/desktop, also when the site is closed) and Telegram for the owner's list | ✅ |
+| Trade calculator: position size from capital and risk %, approximate Upstox charges, net P&L at target/stop, breakeven | ✅ |
 | Combined outlook: up/down probability + BUY/SELL/HOLD from all strategies (logistic model, time-split tested on unseen data; strategy features kept only if they help on a held-out slice of the training data) | ✅ |
 | Live news: Google News RSS per stock every 5 min, NVIDIA/keyword sentiment, news-adjusted probability (capped ±10 pts, self-learning from outcomes), news alerts | ✅ |
 | Upstream Upstox WebSocket feed (protobuf) | ⏳ quotes are REST-polled for now and labelled "Polled" |
@@ -102,7 +104,7 @@ frontend/src/
 
 `GET /api/health` · `GET /api/auth/upstox/login` · `GET /api/instruments` · `GET /api/quotes` ·
 `GET /api/scanner?timeframe=1d|1h|15m|5m` · `GET /api/stocks/{symbol}?timeframe=…` · `POST /api/stocks/{symbol}/explain` ·
-`GET /api/intraday` · `GET /api/today` · `GET /api/patterns/stats?timeframe=…` · `GET /api/strategies/stats?timeframe=…` · `GET /api/news` · `GET /api/news/{symbol}` · `GET /api/movers` · `GET /api/alerts` · `POST /api/alerts/test` · `WS /ws/quotes` (quotes + alerts)
+`GET /api/intraday` · `GET /api/instruments/search?q=` · `GET/PUT /api/watchlist/{device}` · `GET /api/watchlist/{device}/calls` · `PUT/DELETE /api/watchlist/{device}/push` · `GET /api/today` · `GET /api/patterns/stats?timeframe=…` · `GET /api/strategies/stats?timeframe=…` · `GET /api/news` · `GET /api/news/{symbol}` · `GET /api/movers` · `GET /api/alerts` · `POST /api/alerts/test` · `WS /ws/quotes` (quotes + alerts)
 
 ## Known limitations
 

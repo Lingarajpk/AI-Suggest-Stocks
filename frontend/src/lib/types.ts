@@ -342,7 +342,7 @@ export interface OutlookTest {
 }
 
 export interface Outlook {
-  status: "ok" | "not_available";
+  status: "ok" | "not_available" | "training";
   message: string;
   horizon_bars?: number;
   horizon_label?: string;
@@ -429,6 +429,8 @@ export interface IntradayCard {
     base_up_pct: number | null;
   };
   risks: string[];
+  position?: Position | null;
+  action?: { label: string; tone: "bull" | "bear" | "warn" | "muted"; text: string };
   chart?: {
     candles: CandleData[];
     forming_candle: CandleData | null;
@@ -436,6 +438,30 @@ export interface IntradayCard {
     markers: SignalMarker[];
   };
   error?: string;
+}
+
+export interface Position {
+  side: "BUY" | "SELL";
+  entry: number;
+  target: number;
+  stop: number;
+  opened: string;
+  status: "open" | "target" | "stop" | "signal_ended";
+  exit_price: number | null;
+  closed: string | null;
+  pnl_pct: number | null;
+}
+
+export interface WatchCall extends Partial<IntradayCard> {
+  symbol: string;
+  error?: string;
+}
+
+export interface SearchResult {
+  symbol: string;
+  name: string;
+  exchange: string;
+  kind: "equity" | "index";
 }
 
 export interface IntradayDesk {
