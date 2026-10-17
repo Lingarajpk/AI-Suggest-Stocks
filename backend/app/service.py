@@ -2,8 +2,10 @@
 
 import asyncio
 import logging
+import time
 from datetime import date, datetime, timedelta
 
+from app import options as opt
 from app.analysis import indicators as ta
 from app.analysis import patterns as pt
 from app.analysis import probability as pb
@@ -87,6 +89,9 @@ class MarketService:
         self._training: dict[str, asyncio.Task] = {}
         # Work that only changes when a candle completes: (instrument_key, timeframe, part) -> (stamp, value)
         self._memo: dict[tuple, tuple[tuple, object]] = {}
+        # Option contracts (expiries, lot size) per index and short-lived chains: key -> (monotonic time, value)
+        self._opt_contracts: dict[str, tuple[float, list[dict]]] = {}
+        self._opt_chains: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 
     def _memoized(self, key: tuple, stamp: tuple, fn):
         hit = self._memo.get(key)
@@ -409,6 +414,53 @@ class MarketService:
         series["supertrend_dir"] = dirs
         oscillators = {name: values(name) for name in ("rsi14", "macd", "macd_signal", "macd_hist")}
         return [c.model_dump(mode="json") for c in candles[start:]], series, oscillators
+
+    async def option_chain(self, symbol: str, expiry: str | None = None) -> dict:
+        """Option chain of NIFTY 50 / BANK NIFTY / SENSEX with an OI summary and which option to buy now."""
+        inst = await self.instrument(symbol)
+        if not inst or inst.kind != "index" or inst.symbol not in opt.OPTION_INDICES:
+            raise ProviderError("not_found", "Option chains are available for NIFTY 50, BANK NIFTY and SENSEX only", 404)
+        key = inst.instrument_key
+        hit = self._opt_contracts.get(key)
+        if not hit or time.monotonic() - hit[0] > 6 * 3600:
+            hit = (time.monotonic(), await self.provider.option_contracts(inst))
+            self._opt_contracts[key] = hit
+        contracts = hit[1]
+        expiries = opt.upcoming_expiries(contracts, now_ist().date())
+        if not expiries:
+            raise ProviderError("no_expiries", f"No upcoming option expiries found for {inst.symbol}", 404)
+        expiry = expiry if expiry in expiries else expiries[0]
+        ttl = 5 if self.settings.quote_poll_seconds <= 5 else self.settings.quote_poll_seconds
+        chain = self._opt_chains.get((key, expiry))
+        if not chain or time.monotonic() - chain[0] > ttl:
+            chain = (time.monotonic(), await self.provider.option_chain(inst, expiry))
+            self._opt_chains[(key, expiry)] = chain
+        rows, spot = opt.parse_chain(chain[1])
+        quote = self.cached_quote(key)
+        spot = spot or (quote.last_price if quote else None)
+        lot = opt.lot_for(contracts, expiry)
+        try:
+            card = await self.intraday_card(inst, with_chart=False)
+        except ProviderError:
+            raise
+        except Exception:  # the chain is still useful without the call
+            log.exception("intraday call failed for %s", inst.symbol)
+            card = None
+        summary = opt.summarize(rows, spot)
+        return {
+            "symbol": inst.symbol,
+            "instrument": inst.model_dump(),
+            "source": self.provider.name,
+            "generated_at": now_ist().isoformat(),
+            "expiry": expiry,
+            "expiries": expiries[:8],
+            "lot_size": lot,
+            "spot": spot,
+            "summary": summary,
+            "recommendation": opt.recommend(rows, spot, card, summary, lot),
+            "index_call": {k: (card or {}).get(k) for k in ("verdict", "reason", "levels", "atr", "since")} if card else None,
+            "rows": opt.window(rows, spot),
+        }
 
     async def intraday_card(self, inst: Instrument, with_chart: bool) -> dict:
         """Intraday call for one instrument: 5-minute entry timing confirmed by the 15-minute trend."""

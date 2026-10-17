@@ -476,6 +476,12 @@ async def intraday(request: Request, stocks: bool = Query(True)):
     return await svc(request).intraday(include_stocks=stocks)
 
 
+@app.get("/api/options/{symbol}")
+async def option_chain(request: Request, symbol: str, expiry: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$")):
+    """Option chain for NIFTY 50 / BANK NIFTY / SENSEX, OI summary and which option to buy for the intraday call."""
+    return await svc(request).option_chain(symbol, expiry)
+
+
 @app.get("/api/strategies/stats")
 async def strategy_stats(request: Request, timeframe: Timeframe = Query("1d")):
     """Each strategy's and candlestick's hit rate vs. random, pooled across the universe (cached 30 minutes)."""

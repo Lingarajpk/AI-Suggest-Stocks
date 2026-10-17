@@ -170,3 +170,20 @@ def test_intraday_desk_and_index_pages(client):
         r = client.get(f"/api/stocks/{sym}?timeframe=5m")
         assert r.status_code == 200 and r.json()["instrument"]["kind"] == "index"
     assert client.get("/api/stocks/NOTREAL?timeframe=5m").status_code == 404
+
+
+def test_option_chain_for_indices(client):
+    for sym in ("NIFTY50", "SENSEX"):
+        r = client.get(f"/api/options/{sym}")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["expiry"] in body["expiries"] and body["lot_size"] > 0
+        assert len(body["rows"]) == 2 * 15 + 1 and body["summary"]["atm"] is not None
+        rec = body["recommendation"]
+        assert rec["action"] in ("BUY CE", "BUY PE", "WAIT")
+        assert set(rec["candidates"]) == {"CE", "PE"}
+        if rec["pick"]:
+            assert rec["pick"]["target"] > rec["pick"]["entry"] > rec["pick"]["stop"]
+    later = client.get(f"/api/options/NIFTY50?expiry={body['expiries'][1]}")
+    assert later.status_code == 404 or later.json()["expiry"]  # SENSEX expiries differ; just must not error
+    assert client.get("/api/options/RELIANCE").status_code == 404

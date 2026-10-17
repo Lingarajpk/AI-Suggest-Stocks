@@ -13,6 +13,7 @@ import { useWatchlist } from "@/lib/watchlist";
 import { AiExplanation } from "./AiExplanation";
 import { AppHeader } from "./AppHeader";
 import { NewsSidebar } from "./NewsPanel";
+import { OPTION_SYMBOLS, OptionChainPanel } from "./OptionChainPanel";
 import { OutlookCard, OutlookReliability } from "./OutlookCard";
 import { PatternStatsTable, PatternsPanel } from "./PatternsPanel";
 import { StrategiesPanel, StrategyStatsTable } from "./StrategiesPanel";
@@ -400,6 +401,7 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div className="space-y-4">
               {setup && <TradeCalculator key={`plan-${name}-${data.timeframe}`} setup={setup} />}
+              {OPTION_SYMBOLS.includes(data.instrument.symbol) && <OptionChainPanel symbol={data.instrument.symbol} />}
             </div>
             <div className="space-y-4">
               {data.history && <TradeStatus history={data.history} quote={quote} timeframe={data.timeframe} />}

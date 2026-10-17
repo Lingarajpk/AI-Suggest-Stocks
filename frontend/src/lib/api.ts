@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import type { CandleData, Health, IntradayDesk, Point, SearchResult, WatchCall, NewsFeed, PatternStatsResult, ScanResult, StockDetail, StockNews, StrategyStatsResult, Timeframe, TodayResult } from "./types";
+import type { CandleData, Health, IntradayDesk, OptionChain, Point, SearchResult, WatchCall, NewsFeed, PatternStatsResult, ScanResult, StockDetail, StockNews, StrategyStatsResult, Timeframe, TodayResult } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -138,6 +138,12 @@ export function useSearch(query: string) {
 /** Intraday desk: index BUY/SELL calls (5-min entry, 15-min trend) and stocks with a live call. */
 export function useIntraday() {
   return useSWR<IntradayDesk, ApiError>("/api/intraday", fetchIntraday, { refreshInterval: 20_000, keepPreviousData: true });
+}
+
+/** Index option chain with an OI summary and which option to buy (NIFTY 50, BANK NIFTY, SENSEX only). */
+export function useOptionChain(symbol: string | null, expiry: string | null) {
+  const key = symbol ? `/api/options/${encodeURIComponent(symbol)}${expiry ? `?expiry=${expiry}` : ""}` : null;
+  return useSWR<OptionChain, ApiError>(key, fetcher, { refreshInterval: 15_000, keepPreviousData: true });
 }
 
 /** Per-pattern success rates measured across the whole universe (the pattern "training"). */

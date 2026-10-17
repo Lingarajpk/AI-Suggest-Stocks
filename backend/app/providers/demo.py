@@ -4,6 +4,7 @@ Nothing produced here is market data. Every quote is tagged source="demo" and th
 frontend shows a persistent DEMO DATA banner whenever this provider is active.
 """
 
+import math
 import zlib
 from datetime import date, datetime, time, timedelta
 
@@ -40,6 +41,25 @@ DEMO_LISTINGS = {
     "IRCTC": "IRCTC", "DMART": "Avenue Supermarts", "PIDILITIND": "Pidilite", "VEDL": "Vedanta",
 }
 INDEX_BASE = {"NIFTY 50": 20000.0, "BANK NIFTY": 45000.0, "SENSEX": 66000.0}
+
+
+# weekday of the weekly expiry (Mon=0) and lot size, for demo option chains only
+DEMO_OPTIONS = {"NIFTY 50": (1, 75), "BANK NIFTY": (1, 35), "SENSEX": (3, 20)}
+
+
+def _bs(spot: float, strike: float, t: float, iv: float, sign: int) -> tuple[float, float, float, float, float]:
+    """Black-Scholes price and greeks (theta per day) at zero rates; sign +1 = call, -1 = put."""
+    sq = iv * math.sqrt(t)
+    d1 = (math.log(spot / strike) + 0.5 * iv * iv * t) / sq
+    d2 = d1 - sq
+    n = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))  # noqa: E731
+    pdf = math.exp(-d1 * d1 / 2) / math.sqrt(2 * math.pi)
+    price = sign * (spot * n(sign * d1) - strike * n(sign * d2))
+    delta = n(d1) if sign > 0 else n(d1) - 1
+    gamma = pdf / (spot * sq)
+    theta = -spot * pdf * iv / (2 * math.sqrt(t)) / 365
+    vega = spot * pdf * math.sqrt(t) / 100
+    return price, delta, gamma, theta, vega
 
 
 def _seed(symbol: str) -> int:
@@ -80,6 +100,48 @@ class DemoProvider(MarketDataProvider):
             )
             for label in DASHBOARD_INDICES
         ], []
+
+    # ---- options (synthetic, Black-Scholes priced) -------------------------
+    async def option_contracts(self, instrument: Instrument) -> list[dict]:
+        if instrument.symbol not in DEMO_OPTIONS:
+            return []
+        weekday, lot = DEMO_OPTIONS[instrument.symbol]
+        today = now_ist().date()
+        first = today + timedelta(days=(weekday - today.weekday()) % 7)
+        return [{"expiry": (first + timedelta(weeks=w)).isoformat(), "lot_size": lot} for w in range(4)]
+
+    async def option_chain(self, instrument: Instrument, expiry: str) -> list[dict]:
+        if instrument.symbol not in DEMO_OPTIONS:
+            return []
+        spot = (await self.quotes([instrument]))[instrument.instrument_key].last_price
+        # Strike spacing scaled to the synthetic price (~0.25% of spot), so strikes stay positive.
+        step = min((1, 2, 5, 10, 20, 50, 100), key=lambda x: abs(x - spot / 400))
+        atm = round(spot / step) * step
+        days = max((date.fromisoformat(expiry) - now_ist().date()).days, 0) + 0.3
+        t = days / 365
+        rng = np.random.default_rng(_seed(instrument.symbol + expiry))
+        tilt = rng.uniform(-0.4, 0.4)  # which side carries more open interest today
+        rows = []
+        for k in range(-20, 21):
+            strike = atm + k * step
+            iv = 0.12 + 0.0009 * abs(k) ** 1.5
+            out = {"strike_price": strike, "underlying_spot_price": round(spot, 2), "underlying_key": instrument.instrument_key,
+                   "expiry": expiry}
+            for side, sign in (("call_options", 1), ("put_options", -1)):
+                price, delta, gamma, theta, vega = _bs(spot, strike, t, iv, sign)
+                away = (strike - atm) / step * sign  # >0 = out of the money for this side
+                oi = max(0.0, 9e5 * math.exp(-((away - 3) ** 2) / 18) * (1 + sign * tilt) * rng.uniform(0.8, 1.2))
+                ltp = max(0.05, round(price, 2))
+                out[side] = {
+                    "instrument_key": f"DEMO_FO|{instrument.symbol}|{strike:g}{'CE' if sign > 0 else 'PE'}",
+                    "market_data": {"ltp": ltp, "close_price": round(ltp * rng.uniform(0.85, 1.15), 2), "oi": round(oi),
+                                    "prev_oi": round(oi * rng.uniform(0.8, 1.1)), "volume": round(oi * rng.uniform(2, 6)),
+                                    "bid_price": round(max(0.05, ltp - 0.1), 2), "ask_price": round(ltp + 0.1, 2)},
+                    "option_greeks": {"delta": round(delta, 4), "gamma": round(gamma, 6), "theta": round(theta, 2),
+                                      "vega": round(vega, 2), "iv": round(iv * 100, 2), "pop": None},
+                }
+            rows.append(out)
+        return rows
 
     def _base_15m(self, inst: Instrument) -> list[Candle]:
         today = now_ist().date()

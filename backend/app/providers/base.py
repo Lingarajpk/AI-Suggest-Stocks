@@ -122,5 +122,13 @@ class MarketDataProvider(ABC):
         """Equities matching a symbol or company-name query: [{symbol, name, exchange}]."""
         return []
 
+    async def option_contracts(self, instrument: Instrument) -> list[dict]:
+        """Option contracts on an index: [{expiry: "YYYY-MM-DD", lot_size}] (one per expiry is enough)."""
+        raise ProviderError("not_supported", "Option chains are not available from this data source", 404)
+
+    async def option_chain(self, instrument: Instrument, expiry: str) -> list[dict]:
+        """Raw option chain rows in Upstox's /v2/option/chain format."""
+        raise ProviderError("not_supported", "Option chains are not available from this data source", 404)
+
     async def close(self) -> None:
         return None

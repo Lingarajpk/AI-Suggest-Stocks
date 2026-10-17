@@ -604,3 +604,85 @@ export interface Movers {
   fast: MoverRow[];
   fast_window_minutes: number;
 }
+
+// ---- index option chain -------------------------------------------------------
+export interface OptionLeg {
+  instrument_key: string | null;
+  ltp: number | null;
+  change: number | null;
+  oi: number | null;
+  oi_change: number | null;
+  volume: number | null;
+  bid: number | null;
+  ask: number | null;
+  iv: number | null;
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  pop: number | null;
+}
+
+export interface OptionRow {
+  strike: number;
+  pcr: number | null;
+  call: OptionLeg | null;
+  put: OptionLeg | null;
+}
+
+export interface OptionPick {
+  kind: "CE" | "PE";
+  strike: number;
+  instrument_key: string | null;
+  moneyness: "ATM" | "ITM" | "OTM";
+  ltp: number;
+  entry: number;
+  target: number;
+  stop: number;
+  delta: number;
+  iv: number | null;
+  theta: number | null;
+  oi: number | null;
+  lot_size: number | null;
+  lot_cost: number | null;
+  profit_per_lot: number | null;
+  loss_per_lot: number | null;
+  theta_per_lot: number | null;
+  underlying_target: number;
+  underlying_stop: number;
+}
+
+export interface OptionChain {
+  symbol: string;
+  source: string;
+  generated_at: string;
+  expiry: string;
+  expiries: string[];
+  lot_size: number | null;
+  spot: number | null;
+  summary: {
+    pcr: number | null;
+    max_pain: number | null;
+    call_wall: number | null;
+    put_wall: number | null;
+    atm: number | null;
+    atm_iv: number | null;
+    straddle: number | null;
+    call_oi: number;
+    put_oi: number;
+    call_oi_change: number;
+    put_oi_change: number;
+    bias: "bullish" | "bearish" | "neutral";
+    bias_score: number;
+    notes: string[];
+  };
+  recommendation: {
+    action: "BUY CE" | "BUY PE" | "WAIT";
+    reason: string;
+    pick: OptionPick | null;
+    candidates: Partial<Record<"CE" | "PE", OptionPick | null>>;
+    against_oi?: boolean;
+  };
+  index_call: { verdict: string; reason: string; since: string | null } | null;
+  rows: OptionRow[];
+}

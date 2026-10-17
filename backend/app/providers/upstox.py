@@ -263,6 +263,19 @@ class UpstoxProvider(MarketDataProvider):
             )
         return resolved, missing
 
+    # ---- options -----------------------------------------------------
+    async def option_contracts(self, instrument: Instrument) -> list[dict]:
+        data = await self._get("/v2/option/contract", {"instrument_key": instrument.instrument_key})
+        seen: dict[str, dict] = {}
+        for c in data or []:
+            if c.get("expiry") and c["expiry"] not in seen:
+                seen[c["expiry"]] = {"expiry": c["expiry"], "lot_size": c.get("lot_size") or c.get("minimum_lot")}
+        return list(seen.values())
+
+    async def option_chain(self, instrument: Instrument, expiry: str) -> list[dict]:
+        data = await self._get("/v2/option/chain", {"instrument_key": instrument.instrument_key, "expiry_date": expiry})
+        return data if isinstance(data, list) else []
+
     # ---- quotes ------------------------------------------------------
     async def quotes(self, instruments: list[Instrument]) -> dict[str, Quote]:
         by_key = {i.instrument_key: i for i in instruments}
