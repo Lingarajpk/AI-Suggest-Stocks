@@ -209,14 +209,15 @@ def recommend(rows: list[dict], spot: float | None, card: dict | None, summary: 
     if verdict in ("BUY", "SELL"):
         kind = "CE" if verdict == "BUY" else "PE"
         word = "up" if verdict == "BUY" else "down"
-        reason = f"Index intraday call is {verdict}: {(card or {}).get('reason') or ''}".strip()
+        what = "Index" if ((card or {}).get("instrument") or {}).get("kind") == "index" else "Stock"
+        reason = f"{what} intraday call is {verdict}: {(card or {}).get('reason') or ''}".strip()
         against = (verdict == "BUY" and bias == "bearish") or (verdict == "SELL" and bias == "bullish")
         if against:
             reason += f" Caution: open interest leans {bias}, against the move {word}; use a smaller size."
         elif bias != "neutral":
             reason += f" Open interest also leans {bias}."
         return {"action": f"BUY {kind}", "reason": reason, "pick": cands.get(kind), "candidates": cands, "against_oi": against}
-    why = (card or {}).get("reason") or "No confirmed intraday call on the index."
+    why = (card or {}).get("reason") or "No confirmed intraday call yet."
     return {"action": "WAIT", "reason": f"No option buy yet: {why}", "pick": None, "candidates": cands, "against_oi": False}
 
 
