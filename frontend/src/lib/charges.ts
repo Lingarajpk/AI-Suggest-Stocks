@@ -5,12 +5,14 @@
 export const RATES = {
   intraday: { brokeragePct: 0.001, brokerageCap: 20, sttSellPct: 0.00025, sttBuyPct: 0, stampBuyPct: 0.00003, dp: 0 },
   delivery: { brokeragePct: 0.025, brokerageCap: 20, sttSellPct: 0.001, sttBuyPct: 0.001, stampBuyPct: 0.00015, dp: 18.5 },
+  // Index/stock options (buying): flat ₹20 per order, STT 0.1% of the sell premium, NSE options transaction 0.03503%.
+  option: { brokeragePct: 1, brokerageCap: 20, sttSellPct: 0.001, sttBuyPct: 0, stampBuyPct: 0.00003, dp: 0, exchangePct: 0.0003503 },
   exchangePct: 0.0000297, // NSE transaction charge
   sebiPct: 0.000001, // ₹10 per crore
   gstPct: 0.18, // on brokerage + exchange + SEBI (+ DP)
 };
 
-export type Product = "intraday" | "delivery";
+export type Product = "intraday" | "delivery" | "option";
 
 export interface Charges {
   brokerage: number;
@@ -25,14 +27,14 @@ export interface Charges {
 
 /** Charges for buying `qty` at `buy` and selling at `sell` (the order doesn't matter for the maths). */
 export function roundTrip(product: Product, qty: number, buy: number, sell: number): Charges {
-  const r = RATES[product];
+  const r: (typeof RATES)["intraday"] & { exchangePct?: number } = RATES[product];
   const buyValue = qty * buy;
   const sellValue = qty * sell;
   const turnover = buyValue + sellValue;
   const order = (v: number) => (v > 0 ? Math.min(r.brokerageCap, v * r.brokeragePct) : 0);
   const brokerage = order(buyValue) + order(sellValue);
   const stt = sellValue * r.sttSellPct + buyValue * r.sttBuyPct;
-  const exchange = turnover * RATES.exchangePct;
+  const exchange = turnover * (r.exchangePct ?? RATES.exchangePct);
   const sebi = turnover * RATES.sebiPct;
   const stamp = buyValue * r.stampBuyPct;
   const dp = qty > 0 ? r.dp : 0;

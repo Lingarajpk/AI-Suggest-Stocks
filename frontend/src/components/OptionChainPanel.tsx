@@ -5,7 +5,10 @@ import { Layers3 } from "lucide-react";
 import { useOptionChain } from "@/lib/api";
 import { fmtCompact, fmtDate, fmtPrice, fmtTime } from "@/lib/format";
 import type { OptionChain, OptionLeg, OptionPick, OptionRow } from "@/lib/types";
+import { OptionTicket } from "./OptionTicket";
 import { Panel, SkeletonRows } from "./ui";
+
+type OnPick = (kind: "CE" | "PE", strike: number) => void;
 
 /** Indices with an option chain; F&O stocks have one too (the backend checks). */
 export const OPTION_SYMBOLS = ["NIFTY 50", "BANK NIFTY", "SENSEX"];
@@ -17,6 +20,11 @@ const signedK = (v: number | null | undefined) => (v == null ? "—" : `${v > 0 
 export function OptionChainPanel({ symbol, index = false }: { symbol: string; index?: boolean }) {
   const [expiry, setExpiry] = useState<string | null>(null);
   const { data, error, isLoading } = useOptionChain(symbol, expiry);
+  const [ticket, setTicket] = useState<{ kind: "CE" | "PE"; strike: number } | null>(null);
+  const onPick: OnPick = (kind, strike) => setTicket({ kind, strike });
+  // The ticket follows the live chain: its leg (price, greeks) refreshes with every poll.
+  const ticketRow = ticket && data?.rows.find((r) => r.strike === ticket.strike);
+  const ticketLeg = ticket && ticketRow ? (ticket.kind === "CE" ? ticketRow.call : ticketRow.put) : null;
   if (!index && error?.code === "no_options") {
     return (
       <p className="rounded-xl border border-line bg-panel px-4 py-3 text-xs text-faint">
@@ -58,9 +66,10 @@ export function OptionChainPanel({ symbol, index = false }: { symbol: string; in
         <SkeletonRows rows={6} />
       ) : (
         <div className="space-y-4">
-          <Recommendation data={data} />
+          <Recommendation data={data} onPick={onPick} />
           <Summary data={data} />
-          <ChainTable data={data} />
+          <p className="text-[11px] text-faint">Tap any call or put price to open an order ticket.</p>
+          <ChainTable data={data} onPick={onPick} />
           <p className="text-[11px] leading-relaxed text-faint">
             {data.source === "demo" ? "DEMO: synthetic option prices. " : ""}Updated {fmtTime(data.generated_at)} · lot {data.lot_size ?? "—"} ·
             premium target/stop are estimates from the option&apos;s delta and gamma for the index&apos;s target and stop; time decay
@@ -68,11 +77,19 @@ export function OptionChainPanel({ symbol, index = false }: { symbol: string; in
           </p>
         </div>
       )}
+      {data && ticket && ticketLeg && (
+        <OptionTicket
+          key={`${data.expiry}-${ticket.kind}-${ticket.strike}`}
+          data={data}
+          contract={{ kind: ticket.kind, strike: ticket.strike, leg: ticketLeg }}
+          onClose={() => setTicket(null)}
+        />
+      )}
     </Panel>
   );
 }
 
-function Recommendation({ data }: { data: OptionChain }) {
+function Recommendation({ data, onPick }: { data: OptionChain; onPick: OnPick }) {
   const rec = data.recommendation;
   const pick = rec.pick;
   if (rec.action === "WAIT" || !pick) {
@@ -86,8 +103,8 @@ function Recommendation({ data }: { data: OptionChain }) {
         <p className="mt-1.5 text-xs text-muted">{rec.reason}</p>
         {(ce || pe) && (
           <div className="mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
-            {ce && <Candidate label="If it turns BUY" pick={ce} symbol={data.symbol} />}
-            {pe && <Candidate label="If it turns SELL" pick={pe} symbol={data.symbol} />}
+            {ce && <Candidate label="If it turns BUY" pick={ce} symbol={data.symbol} onPick={onPick} />}
+            {pe && <Candidate label="If it turns SELL" pick={pe} symbol={data.symbol} onPick={onPick} />}
           </div>
         )}
       </div>
@@ -115,6 +132,12 @@ function Recommendation({ data }: { data: OptionChain }) {
         {pick.theta_per_lot != null && ` Time decay costs about ${inr(pick.theta_per_lot)} per lot per day.`}
       </p>
       <p className={`mt-1.5 text-xs ${rec.against_oi ? "text-warn" : "text-faint"}`}>{rec.reason}</p>
+      <button
+        onClick={() => onPick(pick.kind, pick.strike)}
+        className={`mt-3 w-full rounded-lg py-2.5 text-sm font-semibold text-bg hover:opacity-90 ${call ? "bg-bull" : "bg-bear"}`}
+      >
+        Open order ticket · {pick.strike.toLocaleString("en-IN")} {pick.kind}
+      </button>
     </div>
   );
 }
@@ -129,10 +152,10 @@ function Level({ label, value, sub, tone }: { label: string; value: number; sub?
   );
 }
 
-function Candidate({ label, pick, symbol }: { label: string; pick: OptionPick; symbol: string }) {
+function Candidate({ label, pick, symbol, onPick }: { label: string; pick: OptionPick; symbol: string; onPick: OnPick }) {
   const call = pick.kind === "CE";
   return (
-    <div className="rounded-md bg-bg/60 px-2.5 py-2">
+    <button onClick={() => onPick(pick.kind, pick.strike)} className="rounded-md bg-bg/60 px-2.5 py-2 text-left hover:ring-1 hover:ring-line">
       <p className="text-[11px] text-muted">{label}</p>
       <p className={`font-semibold ${call ? "text-bull" : "text-bear"}`}>
         {pick.strike.toLocaleString("en-IN")} {pick.kind} @ ₹{fmtPrice(pick.entry)}
@@ -141,7 +164,7 @@ function Candidate({ label, pick, symbol }: { label: string; pick: OptionPick; s
         target ₹{fmtPrice(pick.target)} (+{inr(pick.profit_per_lot)}/lot) · stop ₹{fmtPrice(pick.stop)} (−{inr(pick.loss_per_lot)}/lot) · if {symbol}{" "}
         {call ? "rises to" : "falls to"} {fmtPrice(pick.underlying_target)}
       </p>
-    </div>
+    </button>
   );
 }
 
@@ -173,7 +196,7 @@ function Summary({ data }: { data: OptionChain }) {
   );
 }
 
-function ChainTable({ data }: { data: OptionChain }) {
+function ChainTable({ data, onPick }: { data: OptionChain; onPick: OnPick }) {
   const box = useRef<HTMLDivElement>(null);
   const atmRow = useRef<HTMLTableRowElement>(null);
   const spot = data.spot ?? 0;
@@ -224,6 +247,7 @@ function ChainTable({ data }: { data: OptionChain }) {
                 atm={r.strike === atm}
                 picked={pick && pick.strike === r.strike ? pick.kind : null}
                 rowRef={r.strike === atm ? atmRow : undefined}
+                onPick={onPick}
               />
             </Fragment>
           ))}
@@ -233,18 +257,26 @@ function ChainTable({ data }: { data: OptionChain }) {
   );
 }
 
-function Row({ row, spot, maxOi, atm, picked, rowRef }: {
-  row: OptionRow; spot: number; maxOi: number; atm: boolean; picked: "CE" | "PE" | null; rowRef?: React.Ref<HTMLTableRowElement>;
+function Row({ row, spot, maxOi, atm, picked, rowRef, onPick }: {
+  row: OptionRow; spot: number; maxOi: number; atm: boolean; picked: "CE" | "PE" | null; rowRef?: React.Ref<HTMLTableRowElement>; onPick: OnPick;
 }) {
+  const ltpButton = (kind: "CE" | "PE", leg: OptionLeg | null) =>
+    leg?.ltp ? (
+      <button onClick={() => onPick(kind, row.strike)} className="rounded px-1 underline-offset-2 hover:bg-accent/15 hover:underline" title="Open order ticket">
+        {fmtPrice(leg.ltp)}
+      </button>
+    ) : (
+      "—"
+    );
   const callItm = row.strike < spot, putItm = row.strike > spot;
   const ring = (k: "CE" | "PE") => (picked === k ? "outline outline-2 -outline-offset-2 " + (k === "CE" ? "outline-bull" : "outline-bear") : "");
   return (
     <tr ref={rowRef} className={`border-t border-line/60 ${atm ? "bg-accent/5" : ""}`}>
       <OiCell leg={row.call} maxOi={maxOi} side="call" className={`${callItm ? "bg-warn/5" : ""} ${ring("CE")}`} />
       <td className={`px-2 py-1 ${chgTone(row.call?.oi_change)} ${callItm ? "bg-warn/5" : ""}`}>{signedK(row.call?.oi_change)}</td>
-      <td className={`px-2 py-1 font-semibold text-ink ${callItm ? "bg-warn/5" : ""} ${ring("CE")}`}>{fmtPrice(row.call?.ltp)}</td>
+      <td className={`px-2 py-1 font-semibold text-ink ${callItm ? "bg-warn/5" : ""} ${ring("CE")}`}>{ltpButton("CE", row.call)}</td>
       <td className={`px-2 py-1 text-center font-semibold ${atm ? "text-accent" : "text-ink"}`}>{row.strike.toLocaleString("en-IN")}</td>
-      <td className={`px-2 py-1 text-left font-semibold text-ink ${putItm ? "bg-warn/5" : ""} ${ring("PE")}`}>{fmtPrice(row.put?.ltp)}</td>
+      <td className={`px-2 py-1 text-left font-semibold text-ink ${putItm ? "bg-warn/5" : ""} ${ring("PE")}`}>{ltpButton("PE", row.put)}</td>
       <td className={`px-2 py-1 text-left ${chgTone(row.put?.oi_change)} ${putItm ? "bg-warn/5" : ""}`}>{signedK(row.put?.oi_change)}</td>
       <OiCell leg={row.put} maxOi={maxOi} side="put" className={`${putItm ? "bg-warn/5" : ""} ${ring("PE")}`} />
     </tr>
