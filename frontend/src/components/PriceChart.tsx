@@ -59,17 +59,39 @@ interface Props {
   showIndicators?: boolean;
   /** Still-forming candle, redrawn on every live quote. */
   liveBar: CandleData | null;
+  /** Suggested trade drawn on the chart with rupee amounts (always shown when present). */
+  trade?: ChartTrade | null;
 }
+
+export interface ChartTrade {
+  side: "BUY" | "SELL";
+  entry: number;
+  stop: number;
+  target: number;
+  qty: number;
+  /** Net rupees after charges for the whole quantity (profit positive, loss negative). */
+  profit: number;
+  loss: number;
+  rr: number | null;
+  capital: number;
+  riskPct: number;
+  /** Where the levels come from, e.g. "15-minute setup" or "price ± ATR". */
+  basis: string;
+}
+
+const inr = (v: number) => `₹${Math.abs(Math.round(v)).toLocaleString("en-IN")}`;
+const px = (v: number) => v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export function PriceChart({
   candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario, patterns, recentPatterns,
   showPatterns, strategies, showStrategies, showSupertrend, showVwapBands, liveBar,
-  showEmas = true, showVwap = true, showLevels = true, showIndicators = false,
+  showEmas = true, showVwap = true, showLevels = true, showIndicators = false, trade = null,
 }: Props) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const s = useRef<Record<string, ISeriesApi<"Candlestick" | "Histogram" | "Line">>>({});
   const priceLines = useRef<IPriceLine[]>([]);
+  const tradeLines = useRef<IPriceLine[]>([]);
   const markerApi = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
   const patternSeries = useRef<ISeriesApi<"Line">[]>([]);
 
@@ -186,8 +208,11 @@ export function PriceChart({
       const entry = scenario.direction === "long" ? "Buy zone" : "Sell zone";
       add(scenario.entry_high, C.ema20, entry, LineStyle.Dotted);
       add(scenario.entry_low, C.ema20, "", LineStyle.Dotted);
-      add(scenario.target, C.bull, "Target");
-      add(scenario.stop_loss, C.bear, "Stop");
+      // Target and stop come from the trade lines below, with rupee amounts.
+      if (!trade) {
+        add(scenario.target, C.bull, "Target");
+        add(scenario.stop_loss, C.bear, "Stop");
+      }
     }
     const vp = strategies?.volume_profile;
     if (showStrategies && vp) {
@@ -275,8 +300,31 @@ export function PriceChart({
     );
   }, [
     candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario, patterns, recentPatterns,
-    showPatterns, strategies, showStrategies, showSupertrend, showVwapBands, showEmas, showVwap, showLevels, showIndicators,
+    showPatterns, strategies, showStrategies, showSupertrend, showVwapBands, showEmas, showVwap, showLevels, showIndicators, trade,
   ]);
+
+  // Entry, target and stop of the suggested trade, labelled with what they mean in rupees.
+  const tEntry = trade?.entry, tStop = trade?.stop, tTarget = trade?.target, tSide = trade?.side;
+  const tQty = trade?.qty, tProfit = trade?.profit, tLoss = trade?.loss;
+  useEffect(() => {
+    const cs = s.current.candles as ISeriesApi<"Candlestick"> | undefined;
+    if (!cs) return;
+    tradeLines.current.forEach((pl) => {
+      try {
+        cs.removePriceLine(pl);
+      } catch {
+        /* line belonged to a chart that was rebuilt */
+      }
+    });
+    tradeLines.current = [];
+    if (tEntry == null || tStop == null || tTarget == null) return;
+    const add = (price: number, color: string, title: string, style: LineStyle) =>
+      tradeLines.current.push(cs.createPriceLine({ price, color, lineStyle: style, lineWidth: 2, axisLabelVisible: true, title }));
+    const q = tQty ? ` · Qty ${tQty}` : "";
+    add(tEntry, C.ema20, `${tSide} ${px(tEntry)}${q}`, LineStyle.Dashed);
+    add(tTarget, C.bull, `Target ${px(tTarget)}${tQty ? ` · +${inr(tProfit ?? 0)}` : ""}`, LineStyle.Solid);
+    add(tStop, C.bear, `Stop-loss ${px(tStop)}${tQty ? ` · −${inr(tLoss ?? 0)}` : ""}`, LineStyle.Solid);
+  }, [tEntry, tStop, tTarget, tSide, tQty, tProfit, tLoss, showIndicators, candles]);
 
   // Runs after the data effect above, so the live candle sits on top of the latest setData.
   useEffect(() => {
@@ -288,7 +336,42 @@ export function PriceChart({
   }, [liveBar, candles, showIndicators]);
 
   // Big on every screen: most of the viewport height, within sensible bounds.
-  return <div ref={el} className="h-[72vh] min-h-[460px] max-h-[900px] w-full" />;
+  return (
+    <div className="relative">
+      <div ref={el} className="h-[72vh] min-h-[460px] max-h-[900px] w-full" />
+      {trade && <TradeBox trade={trade} />}
+    </div>
+  );
+}
+
+/** Always-visible summary on the chart: where to stop out, where to book, and what each means in rupees. */
+function TradeBox({ trade }: { trade: ChartTrade }) {
+  const buy = trade.side === "BUY";
+  const perShareGain = Math.abs(trade.target - trade.entry);
+  const perShareRisk = Math.abs(trade.entry - trade.stop);
+  return (
+    <div className="pointer-events-none absolute left-2 top-2 z-10 max-w-[calc(100%-5rem)] rounded-lg border border-line bg-bg/85 px-3 py-2 text-xs shadow-lg backdrop-blur sm:text-[13px]">
+      <p className="flex flex-wrap items-center gap-x-2 font-semibold">
+        <span className={`rounded px-1.5 py-0.5 text-[11px] ${buy ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"}`}>{trade.side}</span>
+        <span className="tabular">@ ₹{px(trade.entry)}</span>
+        {trade.qty > 0 && <span className="tabular text-muted">Qty {trade.qty}</span>}
+        {trade.rr != null && <span className="tabular text-muted">R:R 1:{trade.rr.toFixed(1)}</span>}
+      </p>
+      <p className="tabular mt-1 text-bull">
+        Target ₹{px(trade.target)} <span className="text-faint">(+₹{px(perShareGain)}/sh)</span>
+        {trade.qty > 0 && <strong> → +{inr(trade.profit)}</strong>}
+      </p>
+      <p className="tabular text-bear">
+        Stop-loss ₹{px(trade.stop)} <span className="text-faint">(−₹{px(perShareRisk)}/sh)</span>
+        {trade.qty > 0 && <strong> → −{inr(trade.loss)}</strong>}
+      </p>
+      <p className="mt-1 text-[10px] text-faint">
+        {trade.qty > 0
+          ? `Net after Upstox charges · capital ${inr(trade.capital)}, risk ${trade.riskPct}% · from the ${trade.basis}`
+          : `Capital ${inr(trade.capital)} is too small for one share at this stop · from the ${trade.basis}`}
+      </p>
+    </div>
+  );
 }
 
 export const CHART_LEGEND = [

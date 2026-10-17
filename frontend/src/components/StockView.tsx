@@ -6,6 +6,7 @@ import { ArrowLeft, Calculator, Layers, ShieldAlert, Star } from "lucide-react";
 import { TIMEFRAME_LABEL, TIMEFRAME_SHORT, isIntraday, useHealth, useStock } from "@/lib/api";
 import { changeColor, fmtCompact, fmtNum, fmtPct, fmtPrice, fmtSigned, fmtTime } from "@/lib/format";
 import type { StockDetail, Timeframe, Verdict } from "@/lib/types";
+import { plan } from "@/lib/charges";
 import { buildLiveBar } from "@/lib/liveBar";
 import { useQuoteStream } from "@/lib/useQuoteStream";
 import { useWatchlist } from "@/lib/watchlist";
@@ -16,10 +17,10 @@ import { OutlookCard, OutlookReliability } from "./OutlookCard";
 import { PatternStatsTable, PatternsPanel } from "./PatternsPanel";
 import { StrategiesPanel, StrategyStatsTable } from "./StrategiesPanel";
 import { TrackRecordPanel } from "./TrackRecord";
-import { TradeCalculator, type TradeSetup } from "./TradeCalculator";
+import { PREFS_EVENT, TradeCalculator, loadPrefs, type TradeSetup } from "./TradeCalculator";
 import { TradeStatus } from "./TradeStatus";
 import { Disclaimer } from "./Disclaimer";
-import { CHART_LEGEND, PriceChart } from "./PriceChart";
+import { CHART_LEGEND, PriceChart, type ChartTrade } from "./PriceChart";
 import { StatusNotices } from "./StatusNotices";
 import { FreshnessBadge, Panel, ScoreBar, SignalBadge, SkeletonRows } from "./ui";
 
@@ -140,11 +141,41 @@ function calculatorSetup(data: StockDetail, price: number | null): TradeSetup | 
   const atr = data.snapshot.atr14;
   const p = price ?? data.last_close ?? null;
   if (p && atr) {
-    const up = !(data.model_outlook.status === "ok" && (data.model_outlook.up_pct ?? 50) < 50);
+    // Direction from the outlook model when it is ready, otherwise from the rule signal.
+    const label = data.signal.signal ?? "";
+    const up = data.model_outlook.status === "ok" ? (data.model_outlook.up_pct ?? 50) >= 50 : !label.includes("Bearish");
     const d = up ? 1 : -1;
     return { symbol: sym, side: up ? "BUY" : "SELL", entry: p, stop: +(p - d * 1.5 * atr).toFixed(2), target: +(p + d * 2.5 * atr).toFixed(2), product, source: "the price ± ATR (no active setup)" };
   }
   return null;
+}
+
+/** Capital and risk % from the calculator, kept in sync when the calculator changes them. */
+function useCalcPrefs() {
+  const [prefs, setPrefs] = useState({ capital: 100000, riskPct: 1 });
+  useEffect(() => {
+    const read = () => setPrefs(loadPrefs());
+    read();
+    window.addEventListener(PREFS_EVENT, read);
+    window.addEventListener("storage", read);
+    return () => {
+      window.removeEventListener(PREFS_EVENT, read);
+      window.removeEventListener("storage", read);
+    };
+  }, []);
+  return prefs;
+}
+
+/** The suggested trade with quantity and net rupees at the target and at the stop, for the chart. */
+function chartTrade(setup: TradeSetup | null, prefs: { capital: number; riskPct: number }): ChartTrade | null {
+  if (!setup) return null;
+  const p = plan({ ...prefs, side: setup.side, entry: setup.entry, stop: setup.stop, target: setup.target, product: setup.product ?? "intraday" });
+  if (!p) return null;
+  return {
+    side: setup.side, entry: setup.entry, stop: setup.stop, target: setup.target, qty: p.qty,
+    profit: p.atTarget.net, loss: -p.atStop.net, rr: p.rr, capital: prefs.capital, riskPct: prefs.riskPct,
+    basis: (setup.source ?? "setup").replace(/^the /, ""),
+  };
 }
 
 function ActionBar({ data, price, onCalc, calcOpen }: { data: StockDetail; price: number | null; onCalc: () => void; calcOpen: boolean }) {
@@ -230,6 +261,9 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
   );
   const intraday = isIntraday(timeframe);
   const setup = data ? calculatorSetup(data, quote?.last_price ?? null) : null;
+  const prefs = useCalcPrefs();
+  // Last close (not the ticking price) so the chart lines stay put between candles.
+  const trade = useMemo(() => chartTrade(data ? calculatorSetup(data, null) : null, prefs), [data, prefs]);
 
   return (
     <>
@@ -327,6 +361,7 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
                 showLevels={layers.levels}
                 showIndicators={layers.indicators}
                 liveBar={liveBar}
+                trade={trade}
               />
             ) : (
               !error && <p className="py-20 text-center text-sm text-faint">No candle data available.</p>

@@ -6,8 +6,10 @@ import { plan, type Product } from "@/lib/charges";
 import { fmtPrice } from "@/lib/format";
 
 const PREFS = "ai-stock:calc";
+export const PREFS_EVENT = "ai-stock:calc-changed";
 
-function loadPrefs(): { capital: number; riskPct: number } {
+/** Capital and risk % saved by the calculator; the chart uses the same values. */
+export function loadPrefs(): { capital: number; riskPct: number } {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS) ?? "{}");
     return { capital: Number(p.capital) || 100000, riskPct: Number(p.riskPct) || 1 };
@@ -67,6 +69,7 @@ export function TradeCalculator({ setup, onClose }: { setup: TradeSetup; onClose
   useEffect(() => {
     try {
       localStorage.setItem(PREFS, JSON.stringify({ capital, riskPct }));
+      window.dispatchEvent(new Event(PREFS_EVENT));
     } catch {
       /* storage unavailable */
     }
