@@ -50,7 +50,8 @@ export function StatusNotices({ health, healthError, streamError }: { health?: H
       </Notice>
     );
   }
-  if (streamError) {
+  // A "not connected" error from before the owner logged in is stale once health says connected.
+  if (streamError && !/not connected|reconnect/i.test(streamError)) {
     return (
       <Notice tone="warn" icon={<ServerOff className="size-4" />} title="Quote updates interrupted">
         {streamError}

@@ -43,6 +43,7 @@ class QuoteHub:
         self.service = service
         self.clients: set[WebSocket] = set()
         self._task: asyncio.Task | None = None
+        self._wake = asyncio.Event()
 
     async def join(self, ws: WebSocket) -> None:
         self.clients.add(ws)
@@ -89,7 +90,14 @@ class QuoteHub:
                 log.exception("quote poll failed")
                 await self._broadcast({"type": "error", "code": "internal", "message": "Quote update failed"})
                 delay = 15
-            await asyncio.sleep(delay)
+            # Sleep, but wake early when poked (e.g. right after Upstox reconnects).
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._wake.wait(), delay)
+            self._wake.clear()
+
+    def poke(self) -> None:
+        """Poll now instead of after the current sleep."""
+        self._wake.set()
 
     async def stop(self) -> None:
         if self._task:
@@ -303,6 +311,7 @@ async def upstox_callback(request: Request, code: str = "", state: str = "", err
         msg = "This Upstox account is not the site owner's; the existing connection was kept."
         return RedirectResponse(f"{settings.frontend_origin}/?{urlencode({'upstox': 'error', 'message': msg})}")
     await request.app.state.tokens.set(body["access_token"], user_id=body.get("user_id"), user_name=body.get("user_name"))
+    request.app.state.hub.poke()
     log.info("Upstox access token stored (expires %s)", request.app.state.tokens.status()["expires_at"])
     return RedirectResponse(f"{settings.frontend_origin}/?upstox=connected")
 
@@ -344,6 +353,7 @@ async def upstox_notifier(request: Request):
     expires_at = datetime.fromtimestamp(int(expires_ms) / 1000, IST) if expires_ms else None
     await request.app.state.tokens.set(token, expires_at=expires_at, user_id=user_id,
                                        user_name=profile.get("user_name"), source="approval")
+    request.app.state.hub.poke()
     request.app.state.token_request_until = 0.0
     log.info("Upstox access token received via approval (expires %s)", request.app.state.tokens.status()["expires_at"])
     return {"status": "stored"}
