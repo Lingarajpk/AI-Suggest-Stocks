@@ -416,19 +416,25 @@ class MarketService:
         return [c.model_dump(mode="json") for c in candles[start:]], series, oscillators
 
     async def option_chain(self, symbol: str, expiry: str | None = None) -> dict:
-        """Option chain of NIFTY 50 / BANK NIFTY / SENSEX with an OI summary and which option to buy now."""
+        """Option chain of an index (NIFTY 50 / BANK NIFTY / SENSEX) or F&O stock, with which option to buy now."""
         inst = await self.instrument(symbol)
-        if not inst or inst.kind != "index" or inst.symbol not in opt.OPTION_INDICES:
-            raise ProviderError("not_found", "Option chains are available for NIFTY 50, BANK NIFTY and SENSEX only", 404)
+        if not inst or (inst.kind == "index" and inst.symbol not in opt.OPTION_INDICES):
+            raise ProviderError("no_options", f"{symbol} has no option chain", 404)
         key = inst.instrument_key
         hit = self._opt_contracts.get(key)
         if not hit or time.monotonic() - hit[0] > 6 * 3600:
-            hit = (time.monotonic(), await self.provider.option_contracts(inst))
+            try:
+                found = await self.provider.option_contracts(inst)
+            except ProviderError as exc:
+                if exc.http_status == 401:
+                    raise
+                found = []  # Upstox answers non-F&O stocks with an error: same as no contracts
+            hit = (time.monotonic(), found)
             self._opt_contracts[key] = hit
         contracts = hit[1]
         expiries = opt.upcoming_expiries(contracts, now_ist().date())
         if not expiries:
-            raise ProviderError("no_expiries", f"No upcoming option expiries found for {inst.symbol}", 404)
+            raise ProviderError("no_options", f"{inst.symbol} has no F&O options (only F&O stocks and the main indices do)", 404)
         expiry = expiry if expiry in expiries else expiries[0]
         ttl = 5 if self.settings.quote_poll_seconds <= 5 else self.settings.quote_poll_seconds
         chain = self._opt_chains.get((key, expiry))

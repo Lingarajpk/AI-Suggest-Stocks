@@ -59,6 +59,15 @@ export function TradeCalculator({ setup, onClose }: { setup: TradeSetup; onClose
   const [entry, setEntry] = useState(setup.entry);
   const [stop, setStop] = useState(setup.stop);
   const [target, setTarget] = useState(setup.target);
+  // Switching BUY <-> SELL mirrors the stop and target around the entry, so they stay on the right sides.
+  const changeSide = (next: "BUY" | "SELL") => {
+    if (next === side) return;
+    setSide(next);
+    if (Number.isFinite(entry) && Number.isFinite(stop) && Number.isFinite(target)) {
+      setStop(+(2 * entry - stop).toFixed(2));
+      setTarget(+(2 * entry - target).toFixed(2));
+    }
+  };
 
   useEffect(() => {
     const p = loadPrefs();
@@ -96,7 +105,7 @@ export function TradeCalculator({ setup, onClose }: { setup: TradeSetup; onClose
       <div className="mb-3 flex flex-wrap gap-2 text-xs">
         <div className="flex rounded-lg border border-line bg-panel-2 p-0.5">
           {(["BUY", "SELL"] as const).map((s) => (
-            <button key={s} onClick={() => setSide(s)}
+            <button key={s} onClick={() => changeSide(s)}
               className={`rounded-md px-3 py-1 font-semibold ${side === s ? (s === "BUY" ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear") : "text-muted"}`}>
               {s}
             </button>

@@ -186,4 +186,5 @@ def test_option_chain_for_indices(client):
             assert rec["pick"]["target"] > rec["pick"]["entry"] > rec["pick"]["stop"]
     later = client.get(f"/api/options/NIFTY50?expiry={body['expiries'][1]}")
     assert later.status_code == 404 or later.json()["expiry"]  # SENSEX expiries differ; just must not error
-    assert client.get("/api/options/RELIANCE").status_code == 404
+    none = client.get("/api/options/RELIANCE")  # demo stocks have no options
+    assert none.status_code == 404 and none.json()["error"] == "no_options"

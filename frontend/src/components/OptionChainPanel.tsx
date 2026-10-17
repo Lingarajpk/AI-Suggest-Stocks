@@ -7,15 +7,24 @@ import { fmtCompact, fmtDate, fmtPrice, fmtTime } from "@/lib/format";
 import type { OptionChain, OptionLeg, OptionPick, OptionRow } from "@/lib/types";
 import { Panel, SkeletonRows } from "./ui";
 
-/** Indices that have an option chain (the slug or label of the stock page). */
+/** Indices with an option chain; F&O stocks have one too (the backend checks). */
 export const OPTION_SYMBOLS = ["NIFTY 50", "BANK NIFTY", "SENSEX"];
 
 const inr = (v: number | null | undefined) => (v == null ? "—" : `₹${Math.abs(Math.round(v)).toLocaleString("en-IN")}`);
 const signedK = (v: number | null | undefined) => (v == null ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmtCompact(Math.abs(v))}`);
 
-export function OptionChainPanel({ symbol }: { symbol: string }) {
+/** Option chain for an index or F&O stock; stocks without options get a one-line note. */
+export function OptionChainPanel({ symbol, index = false }: { symbol: string; index?: boolean }) {
   const [expiry, setExpiry] = useState<string | null>(null);
   const { data, error, isLoading } = useOptionChain(symbol, expiry);
+  if (!index && error?.code === "no_options") {
+    return (
+      <p className="rounded-xl border border-line bg-panel px-4 py-3 text-xs text-faint">
+        <Layers3 className="mr-1.5 inline size-3.5" />
+        {symbol} has no F&amp;O options, so there is no option chain. Option chains show for NIFTY 50, BANK NIFTY, SENSEX and F&amp;O stocks.
+      </p>
+    );
+  }
 
   return (
     <Panel
