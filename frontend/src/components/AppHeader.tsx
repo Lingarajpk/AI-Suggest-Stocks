@@ -106,7 +106,7 @@ function StatusDot({ health, healthError, stream, lastUpdate }: { health?: Healt
 
   const demo = health?.data_mode === "demo";
   const connected = !!health?.upstox?.authenticated;
-  const streaming = stream === "open";
+  const streaming = stream === "open" || stream === "polling";
   const [tone, label] = healthError
     ? (["bg-bear", "Offline"] as const)
     : !health
@@ -125,7 +125,7 @@ function StatusDot({ health, healthError, stream, lastUpdate }: { health?: Healt
     ["Data", healthError ? "Backend offline" : demo ? "Demo data (not real prices)" : "Upstox live data"],
     ["Upstox", demo ? "—" : connected ? `Connected${health?.upstox?.connected_as ? ` as ${health.upstox.connected_as}` : ""}` : "Not connected"],
     ["Market", health ? SESSION_LABEL[health.session] : "—"],
-    ["Prices", streaming ? `Updated ${fmtTime(lastUpdate)}` : stream === "connecting" ? "Connecting…" : "Reconnecting…"],
+    ["Prices", streaming ? `Updated ${fmtTime(lastUpdate)}${stream === "polling" ? " (backup feed)" : ""}` : stream === "connecting" ? "Connecting…" : "Reconnecting…"],
   ];
 
   return (
