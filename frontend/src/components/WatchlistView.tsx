@@ -18,9 +18,9 @@ import { TradeCalculator, type TradeSetup } from "./TradeCalculator";
 import { Panel } from "./ui";
 
 const TONE = {
-  bull: "bg-bull text-bg",
-  bear: "bg-bear text-bg",
-  warn: "bg-warn text-bg",
+  bull: "bg-bull text-white",
+  bear: "bg-bear text-white",
+  warn: "bg-warn text-white",
   muted: "bg-muted/15 text-muted",
 } as const;
 
@@ -45,7 +45,7 @@ function AddStock({ onAdd, has }: { onAdd: (s: string) => void; has: (s: string)
   const results = debounced ? (data?.results ?? []) : [];
   return (
     <div className="relative">
-      <label className="flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2.5 focus-within:border-accent">
+      <label className="flex items-center gap-2 rounded-2xl border border-line bg-panel px-3 py-2.5 focus-within:border-accent">
         <Search className="size-4 text-faint" />
         <input
           value={q}
@@ -60,7 +60,7 @@ function AddStock({ onAdd, has }: { onAdd: (s: string) => void; has: (s: string)
         )}
       </label>
       {debounced && (
-        <ul className="absolute z-20 mt-1 max-h-80 w-full overflow-y-auto rounded-xl border border-line bg-panel shadow-2xl shadow-black/50">
+        <ul className="absolute z-20 mt-1 max-h-80 w-full overflow-y-auto rounded-2xl border border-line bg-panel shadow-xl">
           {results.length === 0 ? (
             <li className="px-4 py-3 text-sm text-faint">{isLoading ? "Searching…" : "No matching NSE stock."}</li>
           ) : (
@@ -113,7 +113,7 @@ function NotifySettings({ device }: { device: string }) {
           {notify.enabled ? (
             <button onClick={notify.disable} className="rounded-md px-3 py-1 text-xs text-muted ring-1 ring-line">On · turn off</button>
           ) : (
-            <button onClick={notify.enable} className="rounded-md bg-accent px-3 py-1 text-xs font-semibold text-bg">Turn on</button>
+            <button onClick={notify.enable} className="rounded-md bg-accent px-3 py-1 text-xs font-semibold text-white">Turn on</button>
           )}
         </li>
         <li>
@@ -125,7 +125,7 @@ function NotifySettings({ device }: { device: string }) {
             {push.enabled ? (
               <button onClick={push.disable} className="rounded-md px-3 py-1 text-xs text-muted ring-1 ring-line">On · turn off</button>
             ) : (
-              <button onClick={async () => setPushMsg(await push.enable())} className="rounded-md bg-accent px-3 py-1 text-xs font-semibold text-bg">Turn on</button>
+              <button onClick={async () => setPushMsg(await push.enable())} className="rounded-md bg-accent px-3 py-1 text-xs font-semibold text-white">Turn on</button>
             )}
           </div>
           {(pushMsg || push.needsHomeScreen) && !push.enabled && (
@@ -148,7 +148,7 @@ function NotifySettings({ device }: { device: string }) {
                 placeholder="Owner key"
                 className="min-w-0 flex-1 rounded-md border border-line bg-panel-2 px-2 py-1 text-xs outline-none focus:border-accent"
               />
-              <button onClick={linkTelegram} disabled={!key} className="rounded-md bg-accent px-3 py-1 text-xs font-semibold text-bg disabled:opacity-50">
+              <button onClick={linkTelegram} disabled={!key} className="rounded-md bg-accent px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
                 Use this list for Telegram
               </button>
             </div>
@@ -184,7 +184,7 @@ function CallRow({ c, quote, onRemove }: { c: WatchCall; quote: Quote | null; on
   const p = c.position;
   const setup = setupFor(c);
   return (
-    <li className="rounded-xl border border-line bg-panel p-3">
+    <li className="rounded-2xl border border-line bg-panel p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <Link href={`/stock/${slug(c.symbol)}?tf=5m`} className="text-base font-semibold hover:text-accent">
@@ -273,7 +273,7 @@ export function WatchlistView() {
               return c ? (
                 <CallRow key={sym} c={c} quote={stream.quotes[sym] ?? (c.quote as Quote | null) ?? null} onRemove={() => watch.remove(sym)} />
               ) : (
-                <li key={sym} className="flex items-center justify-between rounded-xl border border-line bg-panel p-3 text-sm">
+                <li key={sym} className="flex items-center justify-between rounded-2xl border border-line bg-panel p-3 text-sm">
                   <span className="font-semibold">{sym}</span>
                   <span className="text-xs text-faint">{error ? error.message : "Loading call…"}</span>
                 </li>

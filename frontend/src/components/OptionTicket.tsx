@@ -225,7 +225,7 @@ export function OptionTicket({ data, contract, onClose }: { data: OptionChain; c
           </div>
           <button
             onClick={copy}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-bull py-3 text-sm font-semibold text-bg hover:opacity-90"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-bull py-3 text-sm font-semibold text-white hover:opacity-90"
           >
             <Copy className="size-4" /> {copied ? "Copied" : "Copy order for your broker app"}
           </button>

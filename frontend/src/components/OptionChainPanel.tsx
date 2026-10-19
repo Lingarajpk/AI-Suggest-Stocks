@@ -27,7 +27,7 @@ export function OptionChainPanel({ symbol, index = false }: { symbol: string; in
   const ticketLeg = ticket && ticketRow ? (ticket.kind === "CE" ? ticketRow.call : ticketRow.put) : null;
   if (!index && error?.code === "no_options") {
     return (
-      <p className="rounded-xl border border-line bg-panel px-4 py-3 text-xs text-faint">
+      <p className="rounded-2xl border border-line bg-panel px-4 py-3 text-xs text-faint">
         <Layers3 className="mr-1.5 inline size-3.5" />
         {symbol} has no F&amp;O options, so there is no option chain. Option chains show for NIFTY 50, BANK NIFTY, SENSEX and F&amp;O stocks.
       </p>
@@ -114,7 +114,7 @@ function Recommendation({ data, onPick }: { data: OptionChain; onPick: OnPick })
   return (
     <div className={`rounded-lg border p-3 ${call ? "border-bull/40 bg-bull/5" : "border-bear/40 bg-bear/5"}`}>
       <p className="flex flex-wrap items-center gap-2">
-        <span className={`rounded-md px-2.5 py-1 text-sm font-bold ${call ? "bg-bull text-bg" : "bg-bear text-bg"}`}>
+        <span className={`rounded-md px-2.5 py-1 text-sm font-bold ${call ? "bg-bull text-white" : "bg-bear text-white"}`}>
           BUY {pick.strike.toLocaleString("en-IN")} {pick.kind}
         </span>
         <span className="text-xs text-muted">
@@ -134,7 +134,7 @@ function Recommendation({ data, onPick }: { data: OptionChain; onPick: OnPick })
       <p className={`mt-1.5 text-xs ${rec.against_oi ? "text-warn" : "text-faint"}`}>{rec.reason}</p>
       <button
         onClick={() => onPick(pick.kind, pick.strike)}
-        className={`mt-3 w-full rounded-lg py-2.5 text-sm font-semibold text-bg hover:opacity-90 ${call ? "bg-bull" : "bg-bear"}`}
+        className={`mt-3 w-full rounded-lg py-2.5 text-sm font-semibold text-white hover:opacity-90 ${call ? "bg-bull" : "bg-bear"}`}
       >
         Open order ticket · {pick.strike.toLocaleString("en-IN")} {pick.kind}
       </button>
@@ -144,7 +144,7 @@ function Recommendation({ data, onPick }: { data: OptionChain; onPick: OnPick })
 
 function Level({ label, value, sub, tone }: { label: string; value: number; sub?: string; tone: string }) {
   return (
-    <div className="rounded-md bg-bg/60 px-2 py-2">
+    <div className="rounded-md bg-panel px-2 py-2">
       <p className="text-[11px] text-muted">{label}</p>
       <p className={`tabular text-lg font-semibold ${tone}`}>₹{fmtPrice(value)}</p>
       {sub && <p className={`tabular text-[11px] ${tone}`}>{sub}</p>}
@@ -155,7 +155,7 @@ function Level({ label, value, sub, tone }: { label: string; value: number; sub?
 function Candidate({ label, pick, symbol, onPick }: { label: string; pick: OptionPick; symbol: string; onPick: OnPick }) {
   const call = pick.kind === "CE";
   return (
-    <button onClick={() => onPick(pick.kind, pick.strike)} className="rounded-md bg-bg/60 px-2.5 py-2 text-left hover:ring-1 hover:ring-line">
+    <button onClick={() => onPick(pick.kind, pick.strike)} className="rounded-md bg-panel px-2.5 py-2 text-left hover:ring-1 hover:ring-line">
       <p className="text-[11px] text-muted">{label}</p>
       <p className={`font-semibold ${call ? "text-bull" : "text-bear"}`}>
         {pick.strike.toLocaleString("en-IN")} {pick.kind} @ ₹{fmtPrice(pick.entry)}

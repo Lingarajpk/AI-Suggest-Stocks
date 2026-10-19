@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   CandlestickSeries,
   ColorType,
@@ -14,11 +14,11 @@ import {
   type ISeriesMarkersPluginApi,
   type UTCTimestamp,
 } from "lightweight-charts";
+import { chartPalette, useTheme } from "@/lib/theme";
 import type { CandleData, IntradayCard } from "@/lib/types";
 
 const IST_OFFSET = 5.5 * 3600;
 const t = (iso: string) => (Date.parse(iso) / 1000 + IST_OFFSET) as UTCTimestamp;
-const C = { bull: "#22c55e", bear: "#f05252", muted: "#8494a7", line: "#1d2735", vwap: "#2dd4bf", ema: "#5aa9ff", entry: "#5aa9ff" };
 
 /** Compact 5-minute chart for an intraday card: candles, session VWAP (±1σ), Supertrend, signal arrows, levels. */
 export function IntradayChart({ card, liveBar, height = 380 }: { card: IntradayCard; liveBar: CandleData | null; height?: number }) {
@@ -28,13 +28,18 @@ export function IntradayChart({ card, liveBar, height = 380 }: { card: IntradayC
   const markerApi = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
   const lines = useRef<IPriceLine[]>([]);
   const fitted = useRef(false);
+  const theme = useTheme();
+  const C = useMemo(() => {
+    const p = chartPalette(theme);
+    return { ...p, ema: p.ema20, entry: p.ema20 };
+  }, [theme]);
 
   useEffect(() => {
     if (!el.current) return;
     const c = createChart(el.current, {
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: C.muted, fontSize: 10 },
-      grid: { vertLines: { color: "#111925" }, horzLines: { color: "#111925" } },
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: C.text, fontSize: 10, fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" },
+      grid: { vertLines: { color: C.grid }, horzLines: { color: C.grid } },
       rightPriceScale: { borderColor: C.line },
       timeScale: { borderColor: C.line, timeVisible: true, secondsVisible: false },
       crosshair: { mode: 0 },
@@ -58,8 +63,9 @@ export function IntradayChart({ card, liveBar, height = 380 }: { card: IntradayC
       s.current = {};
       markerApi.current = null;
       lines.current = [];
+      fitted.current = false;
     };
-  }, []);
+  }, [C]);
 
   const data = card.chart;
   useEffect(() => {
@@ -97,12 +103,12 @@ export function IntradayChart({ card, liveBar, height = 380 }: { card: IntradayC
       chart.current.timeScale().fitContent(); // once, so later refreshes keep the user's zoom
       fitted.current = true;
     }
-  }, [data, card.levels]);
+  }, [data, card.levels, C]);
 
   useEffect(() => {
     if (!liveBar || !s.current.candles) return;
     s.current.candles.update({ time: t(liveBar.time), open: liveBar.open, high: liveBar.high, low: liveBar.low, close: liveBar.close });
-  }, [liveBar, data]);
+  }, [liveBar, data, C]);
 
   return <div ref={el} style={{ height }} className="w-full" />;
 }

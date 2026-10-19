@@ -138,7 +138,7 @@ function OwnerConnect({ protectedByKey }: { protectedByKey: boolean }) {
         <button
           onClick={requestApproval}
           disabled={busy || (protectedByKey && !key)}
-          className="rounded-md bg-accent px-3 py-1.5 font-semibold text-bg hover:bg-accent/90 disabled:opacity-50"
+          className="rounded-md bg-accent px-3 py-1.5 font-semibold text-white hover:bg-accent/90 disabled:opacity-50"
         >
           {busy ? "Sending…" : "Send approval to my Upstox app"}
         </button>
@@ -172,9 +172,9 @@ function useLoginError() {
 }
 
 function Notice({ tone, icon, title, children }: { tone: "warn" | "bear"; icon: React.ReactNode; title: string; children: React.ReactNode }) {
-  const cls = tone === "warn" ? "border-warn/30 bg-warn/5 text-warn" : "border-bear/30 bg-bear/5 text-bear";
+  const cls = tone === "warn" ? "border-warn/25 bg-warn/8 text-warn" : "border-bear/25 bg-bear/8 text-bear";
   return (
-    <div className={`flex gap-3 rounded-xl border px-4 py-3 text-sm ${cls}`}>
+    <div className={`flex gap-3 rounded-2xl border px-4 py-3 text-sm ${cls}`}>
       <span className="mt-0.5">{icon}</span>
       <div>
         <p className="font-semibold">{title}</p>

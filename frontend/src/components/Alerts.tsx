@@ -56,20 +56,20 @@ export function AlertsBell({ alerts, health }: { alerts: Alert[]; health?: Healt
           setOpen((o) => !o);
           setSeen(alerts[0]?.id ?? 0);
         }}
-        className="relative inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-ink ring-1 ring-line hover:ring-accent/50"
+        className="relative grid size-9 place-items-center rounded-full text-muted hover:bg-panel-2 hover:text-ink"
         aria-label="Alerts"
+        title="Alerts"
       >
-        {notify.enabled ? <BellRing className="size-3.5 text-accent" /> : <Bell className="size-3.5" />}
-        Alerts
+        {notify.enabled ? <BellRing className="size-[18px] text-accent" /> : <Bell className="size-[18px]" />}
         {unread > 0 && (
-          <span className="absolute -top-1.5 -right-1.5 grid min-w-5 place-items-center rounded-full bg-bear px-1 text-[10px] font-bold text-white">
+          <span className="absolute -top-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full bg-bear px-1 text-[10px] font-bold text-white">
             {unread > 99 ? "99+" : unread}
           </span>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 z-30 mt-2 w-[min(420px,calc(100vw-2rem))] rounded-xl border border-line bg-panel shadow-2xl shadow-black/50">
+        <div className="absolute right-0 z-30 mt-2 w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-line bg-panel shadow-xl">
           <div className="border-b border-line px-4 py-3">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-semibold">Automatic alerts</p>
@@ -80,7 +80,7 @@ export function AlertsBell({ alerts, health }: { alerts: Alert[]; health?: Healt
                   <BellOff className="size-3.5" /> Turn off pop-ups
                 </button>
               ) : (
-                <button onClick={notify.enable} className="rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-bg hover:bg-accent/90">
+                <button onClick={notify.enable} className="rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-white hover:bg-accent/90">
                   Turn on pop-ups &amp; sound
                 </button>
               )}
@@ -131,7 +131,7 @@ export function AlertToast({ alert }: { alert: Alert | null }) {
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 16 }}
-            className={`pointer-events-auto rounded-xl border bg-panel p-4 shadow-2xl shadow-black/50 ${DIR_STYLE[visible.direction].split(" ")[0]}`}
+            className={`pointer-events-auto rounded-xl border bg-panel p-4 shadow-xl ${DIR_STYLE[visible.direction].split(" ")[0]}`}
           >
             <div className="flex items-start justify-between gap-3">
               <ul className="min-w-0 flex-1">

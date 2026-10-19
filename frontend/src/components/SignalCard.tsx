@@ -28,7 +28,7 @@ export function SignalCard({
   const evidence = [...(sig?.evidence ?? [])].filter((e) => e.weight > 0).sort((a, b) => Math.abs(b.score * b.weight) - Math.abs(a.score * a.weight));
 
   return (
-    <motion.article layout className="flex flex-col rounded-xl border border-line bg-panel-2/60 p-4">
+    <motion.article layout className="flex flex-col rounded-2xl border border-line bg-panel-2/60 p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <Link href={`/stock/${row.instrument.symbol}`} className="font-semibold hover:text-accent">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   CandlestickSeries,
   ColorType,
@@ -15,16 +15,15 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
+import { chartPalette, useTheme } from "@/lib/theme";
 import type { CandleData, ClosedTrade, PatternInstance, Point, Scenario, SignalMarker, StrategyBlock, StrategyKey } from "@/lib/types";
 
 const IST_OFFSET = 5.5 * 3600;
 // Lightweight Charts renders timestamps as UTC; shift so the axis reads in IST.
 const t = (iso: string) => (Date.parse(iso) / 1000 + IST_OFFSET) as UTCTimestamp;
 
-const C = {
-  pattern: "#e879f9", bull: "#22c55e", bear: "#f05252", muted: "#8494a7", line: "#1d2735", ema20: "#5aa9ff", ema50: "#f5a524",
-  ema200: "#c084fc", bb: "#4d5b6d", vwap: "#2dd4bf", strategy: "#38bdf8", candle: "#fb923c", profile: "#fde047",
-};
+// Legend swatches (the chart itself uses the palette of the current theme).
+const LEGEND_C = chartPalette("light");
 
 // Short chart labels for strategy markers (breakout probability flips too often to mark).
 const STRATEGY_TAG: Partial<Record<StrategyKey, string>> = {
@@ -94,6 +93,8 @@ export function PriceChart({
   const tradeLines = useRef<IPriceLine[]>([]);
   const markerApi = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
   const patternSeries = useRef<ISeriesApi<"Line">[]>([]);
+  const theme = useTheme();
+  const C = useMemo(() => chartPalette(theme), [theme]);
 
   useEffect(() => {
     if (!el.current) return;
@@ -101,11 +102,12 @@ export function PriceChart({
       autoSize: true,
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
-        textColor: C.muted,
+        textColor: C.text,
         fontSize: 11,
-        panes: { separatorColor: C.line, separatorHoverColor: "#26364a" },
+        fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+        panes: { separatorColor: C.line, separatorHoverColor: C.separatorHover },
       },
-      grid: { vertLines: { color: "#111925" }, horzLines: { color: "#111925" } },
+      grid: { vertLines: { color: C.grid }, horzLines: { color: C.grid } },
       rightPriceScale: { borderColor: C.line },
       timeScale: { borderColor: C.line, timeVisible: true, secondsVisible: false },
       crosshair: { mode: 0 },
@@ -138,7 +140,7 @@ export function PriceChart({
 
     // RSI and MACD panes only when asked for: without them the price chart gets the full height.
     if (showIndicators) {
-      s.current.rsi14 = line("#a78bfa", 1, 2);
+      s.current.rsi14 = line(C.rsi, 1, 2);
       s.current.rsi14.createPriceLine({ price: 70, color: C.bear, lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
       s.current.rsi14.createPriceLine({ price: 30, color: C.bull, lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
       s.current.macd_hist = c.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, 2);
@@ -161,14 +163,14 @@ export function PriceChart({
       markerApi.current = null;
       patternSeries.current = [];
     };
-  }, [showIndicators]);
+  }, [showIndicators, C]);
 
   useEffect(() => {
     const ser = s.current;
     if (!chart.current || !ser.candles) return;
     ser.candles.setData(candles.map((k) => ({ time: t(k.time), open: k.open, high: k.high, low: k.low, close: k.close })));
     ser.volume.setData(
-      candles.map((k) => ({ time: t(k.time), value: k.volume, color: k.close >= k.open ? "rgba(34,197,94,0.25)" : "rgba(240,82,82,0.25)" })),
+      candles.map((k) => ({ time: t(k.time), value: k.volume, color: k.close >= k.open ? C.volUp : C.volDown })),
     );
     const pts = (p?: Point[]) => (p ?? []).map((x) => ({ time: t(x.time), value: x.value }));
     for (const k of ["ema20", "ema50", "ema200", "bb_upper", "bb_lower", "vwap"]) ser[k].setData(pts(series[k]));
@@ -193,7 +195,7 @@ export function PriceChart({
       ser.macd.setData(pts(oscillators.macd));
       ser.macd_signal.setData(pts(oscillators.macd_signal));
       ser.macd_hist.setData(
-        (oscillators.macd_hist ?? []).map((x) => ({ time: t(x.time), value: x.value, color: x.value >= 0 ? "rgba(34,197,94,0.5)" : "rgba(240,82,82,0.5)" })),
+        (oscillators.macd_hist ?? []).map((x) => ({ time: t(x.time), value: x.value, color: x.value >= 0 ? C.histUp : C.histDown })),
       );
     }
 
@@ -300,7 +302,7 @@ export function PriceChart({
     );
   }, [
     candles, series, oscillators, support, resistance, intraday, showBands, markers, exits, showMarkers, scenario, patterns, recentPatterns,
-    showPatterns, strategies, showStrategies, showSupertrend, showVwapBands, showEmas, showVwap, showLevels, showIndicators, trade,
+    showPatterns, strategies, showStrategies, showSupertrend, showVwapBands, showEmas, showVwap, showLevels, showIndicators, trade, C,
   ]);
 
   // Entry, target and stop of the suggested trade, labelled with what they mean in rupees.
@@ -324,7 +326,7 @@ export function PriceChart({
     add(tEntry, C.ema20, `${tSide} ${px(tEntry)}${q}`, LineStyle.Dashed);
     add(tTarget, C.bull, `Target ${px(tTarget)}${tQty ? ` · +${inr(tProfit ?? 0)}` : ""}`, LineStyle.Solid);
     add(tStop, C.bear, `Stop-loss ${px(tStop)}${tQty ? ` · −${inr(tLoss ?? 0)}` : ""}`, LineStyle.Solid);
-  }, [tEntry, tStop, tTarget, tSide, tQty, tProfit, tLoss, showIndicators, candles]);
+  }, [tEntry, tStop, tTarget, tSide, tQty, tProfit, tLoss, showIndicators, candles, C]);
 
   // Runs after the data effect above, so the live candle sits on top of the latest setData.
   useEffect(() => {
@@ -332,8 +334,8 @@ export function PriceChart({
     if (!liveBar || !ser.candles) return;
     const time = t(liveBar.time);
     ser.candles.update({ time, open: liveBar.open, high: liveBar.high, low: liveBar.low, close: liveBar.close });
-    ser.volume.update({ time, value: liveBar.volume, color: liveBar.close >= liveBar.open ? "rgba(34,197,94,0.25)" : "rgba(240,82,82,0.25)" });
-  }, [liveBar, candles, showIndicators]);
+    ser.volume.update({ time, value: liveBar.volume, color: liveBar.close >= liveBar.open ? C.volUp : C.volDown });
+  }, [liveBar, candles, showIndicators, C]);
 
   // Big on every screen: most of the viewport height, within sensible bounds.
   return (
@@ -350,7 +352,7 @@ function TradeBox({ trade }: { trade: ChartTrade }) {
   const perShareGain = Math.abs(trade.target - trade.entry);
   const perShareRisk = Math.abs(trade.entry - trade.stop);
   return (
-    <div className="pointer-events-none absolute left-2 top-2 z-10 max-w-[calc(100%-5rem)] rounded-lg border border-line bg-bg/85 px-3 py-2 text-xs shadow-lg backdrop-blur sm:text-[13px]">
+    <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-[calc(100%-6rem)] rounded-2xl border border-line bg-panel/90 px-3 py-2 text-xs shadow-sm backdrop-blur sm:text-[13px]">
       <p className="flex flex-wrap items-center gap-x-2 font-semibold">
         <span className={`rounded px-1.5 py-0.5 text-[11px] ${buy ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"}`}>{trade.side}</span>
         <span className="tabular">@ ₹{px(trade.entry)}</span>
@@ -365,28 +367,24 @@ function TradeBox({ trade }: { trade: ChartTrade }) {
         Stop-loss ₹{px(trade.stop)} <span className="text-faint">(−₹{px(perShareRisk)}/sh)</span>
         {trade.qty > 0 && <strong> → −{inr(trade.loss)}</strong>}
       </p>
-      <p className="mt-1 text-[10px] text-faint">
-        {trade.qty > 0
-          ? `Net after Upstox charges · capital ${inr(trade.capital)}, risk ${trade.riskPct}% · from the ${trade.basis}`
-          : `Capital ${inr(trade.capital)} is too small for one share at this stop · from the ${trade.basis}`}
-      </p>
+      {trade.qty === 0 && <p className="mt-1 text-[10px] text-faint">Capital {inr(trade.capital)} is too small for one share at this stop</p>}
     </div>
   );
 }
 
 export const CHART_LEGEND = [
-  { label: "EMA 20", color: C.ema20 },
-  { label: "EMA 50", color: C.ema50 },
-  { label: "EMA 200", color: C.ema200 },
-  { label: "VWAP (intraday)", color: C.vwap },
-  { label: "Bollinger 20,2", color: C.bb },
-  { label: "▲ BUY / ▼ SELL signal points", color: C.bull },
-  { label: "EXIT (sell the buy) / COVER (buy back the sell)", color: C.ema50 },
-  { label: "Buy/Sell zone · Target · Stop (current setup)", color: C.ema20 },
-  { label: "● Chart pattern outline / breakout", color: C.pattern },
-  { label: "Supertrend 10,3 (green up / red down)", color: C.bull },
-  { label: "VWAP ±1σ / ±2σ bands (intraday)", color: C.vwap },
-  { label: "■ Strategy signal (T+M, Sweep, FVG, IFVG, AMD, ST flip, MACD Div) · FVG zones", color: C.strategy },
-  { label: "● Candlestick pattern", color: C.candle },
-  { label: "POC / value area (VAH–VAL)", color: C.profile },
+  { label: "EMA 20", color: LEGEND_C.ema20 },
+  { label: "EMA 50", color: LEGEND_C.ema50 },
+  { label: "EMA 200", color: LEGEND_C.ema200 },
+  { label: "VWAP (intraday)", color: LEGEND_C.vwap },
+  { label: "Bollinger 20,2", color: LEGEND_C.bb },
+  { label: "▲ BUY / ▼ SELL signal points", color: LEGEND_C.bull },
+  { label: "EXIT (sell the buy) / COVER (buy back the sell)", color: LEGEND_C.ema50 },
+  { label: "Buy/Sell zone · Target · Stop (current setup)", color: LEGEND_C.ema20 },
+  { label: "● Chart pattern outline / breakout", color: LEGEND_C.pattern },
+  { label: "Supertrend 10,3 (green up / red down)", color: LEGEND_C.bull },
+  { label: "VWAP ±1σ / ±2σ bands (intraday)", color: LEGEND_C.vwap },
+  { label: "■ Strategy signal (T+M, Sweep, FVG, IFVG, AMD, ST flip, MACD Div) · FVG zones", color: LEGEND_C.strategy },
+  { label: "● Candlestick pattern", color: LEGEND_C.candle },
+  { label: "POC / value area (VAH–VAL)", color: LEGEND_C.profile },
 ];

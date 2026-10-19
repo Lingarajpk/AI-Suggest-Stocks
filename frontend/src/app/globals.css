@@ -1,22 +1,44 @@
 @import "tailwindcss";
 
+/* dark: utilities follow the theme toggle (<html data-theme="dark">), not the OS setting */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Light theme (default): clean, Groww-style. Every component uses these names. */
 @theme {
-  --color-bg: #070b11;
-  --color-panel: #0e141d;
-  --color-panel-2: #131b26;
-  --color-line: #1d2735;
-  --color-ink: #e6edf5;
-  --color-muted: #8494a7;
-  --color-faint: #4d5b6d;
-  --color-bull: #22c55e;
-  --color-bear: #f05252;
-  --color-warn: #f5a524;
-  --color-accent: #5aa9ff;
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --color-bg: #f5f6f8;
+  --color-panel: #ffffff;
+  --color-panel-2: #f3f4f7;
+  --color-line: #e6e8ee;
+  --color-ink: #1b2129;
+  --color-muted: #5f6b7a;
+  --color-faint: #98a1ae;
+  --color-bull: #00b386;
+  --color-bear: #eb5b3c;
+  --color-warn: #d97706;
+  --color-accent: #5367ff;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
+:root[data-theme="dark"] {
+  --color-bg: #0f1115;
+  --color-panel: #171a20;
+  --color-panel-2: #1f232b;
+  --color-line: #2a2f39;
+  --color-ink: #e8ebf0;
+  --color-muted: #9aa3b0;
+  --color-faint: #5d6675;
+  --color-bull: #00c896;
+  --color-bear: #ff6b4a;
+  --color-warn: #f5a524;
+  --color-accent: #7b8cff;
+}
+
 html {
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
   color-scheme: dark;
 }
 
@@ -27,4 +49,10 @@ body {
 
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* Thin, quiet scrollbars inside tables and lists */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
 }

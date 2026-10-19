@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Calculator, Layers, ShieldAlert, Star } from "lucide-react";
+import { ArrowLeft, Calculator, Layers, Layers3, ShieldAlert, Star } from "lucide-react";
 import { TIMEFRAME_LABEL, TIMEFRAME_SHORT, isIntraday, useHealth, useStock } from "@/lib/api";
-import { changeColor, fmtCompact, fmtNum, fmtPct, fmtPrice, fmtSigned, fmtTime } from "@/lib/format";
+import { changeColor, fmtNum, fmtPct, fmtPrice, fmtSigned, fmtTime } from "@/lib/format";
 import type { StockDetail, Timeframe, Verdict } from "@/lib/types";
 import { plan } from "@/lib/charges";
 import { buildLiveBar } from "@/lib/liveBar";
@@ -23,7 +23,7 @@ import { TradeStatus } from "./TradeStatus";
 import { Disclaimer } from "./Disclaimer";
 import { CHART_LEGEND, PriceChart, type ChartTrade } from "./PriceChart";
 import { StatusNotices } from "./StatusNotices";
-import { FreshnessBadge, Panel, ScoreBar, SignalBadge, SkeletonRows } from "./ui";
+import { FreshnessBadge, HowItWorks, Panel, ScoreBar, SignalBadge, SkeletonRows } from "./ui";
 
 const TIMEFRAMES: Timeframe[] = ["1m", "3m", "5m", "15m", "30m", "1h", "1d", "1w"];
 
@@ -102,31 +102,42 @@ function LayersMenu({ layers, toggle, intraday }: { layers: Record<LayerKey, boo
   const on = LAYERS.filter((l) => layers[l.key] && (!l.intradayOnly || intraday)).length;
   return (
     <div ref={ref} className="relative">
-      <button onClick={() => setOpen((o) => !o)} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-ink ring-1 ring-line hover:ring-accent/60">
+      <button onClick={() => setOpen((o) => !o)} className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line px-3 text-xs font-semibold text-ink hover:border-accent/50">
         <Layers className="size-3.5" /> Layers <span className="text-faint">{on}</span>
       </button>
       {open && (
-        <div className="absolute right-0 z-30 mt-2 w-72 rounded-xl border border-line bg-panel p-2 shadow-2xl shadow-black/50">
+        <div className="absolute right-0 z-30 mt-2 w-80 rounded-2xl border border-line bg-panel p-2 shadow-xl">
           {LAYERS.filter((l) => !l.intradayOnly || intraday).map((l) => (
-            <label key={l.key} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-panel-2">
-              <input type="checkbox" checked={layers[l.key]} onChange={() => toggle(l.key)} className="accent-accent" />
+            <label key={l.key} className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm hover:bg-panel-2">
+              <input type="checkbox" checked={layers[l.key]} onChange={() => toggle(l.key)} className="size-4 accent-accent" />
               {l.label}
             </label>
           ))}
+          <div className="mt-1 border-t border-line px-2.5 pt-2 pb-1">
+            <p className="mb-1.5 text-[11px] font-semibold text-muted">Legend</p>
+            <div className="grid grid-cols-1 gap-1 text-[11px] text-muted">
+              {CHART_LEGEND.map((l) => (
+                <span key={l.label} className="inline-flex items-center gap-2">
+                  <span className="h-0.5 w-4 shrink-0 rounded" style={{ background: l.color }} />
+                  {l.label}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-// ---- action bar: one clear instruction above the chart -------------------------
+// ---- call card: one clear instruction under the chart ------------------------------
 const VERDICT_STYLE: Record<Verdict | "TRAINING", string> = {
-  BUY: "bg-bull text-bg",
-  SELL: "bg-bear text-bg",
-  HOLD: "bg-warn/20 text-warn",
-  "NO EDGE": "bg-muted/15 text-muted",
-  "NO TRADE": "bg-warn/20 text-warn",
-  TRAINING: "bg-muted/15 text-muted",
+  BUY: "bg-bull text-white",
+  SELL: "bg-bear text-white",
+  HOLD: "bg-warn/15 text-warn",
+  "NO EDGE": "bg-panel-2 text-muted",
+  "NO TRADE": "bg-warn/15 text-warn",
+  TRAINING: "bg-panel-2 text-muted",
 };
 
 function calculatorSetup(data: StockDetail, price: number | null): TradeSetup | null {
@@ -179,71 +190,99 @@ function chartTrade(setup: TradeSetup | null, prefs: { capital: number; riskPct:
   };
 }
 
-function ActionBar({ data, price, onCalc, calcOpen }: { data: StockDetail; price: number | null; onCalc: () => void; calcOpen: boolean }) {
+const inr = (v: number) => `₹${Math.abs(Math.round(v)).toLocaleString("en-IN")}`;
+
+function Stat({ label, value, sub, tone = "text-ink" }: { label: string; value: string; sub?: string; tone?: string }) {
+  return (
+    <div className="rounded-xl bg-panel-2 px-3.5 py-2.5">
+      <p className="text-[11px] font-medium text-muted">{label}</p>
+      <p className={`tabular text-base font-semibold ${tone}`}>{value}</p>
+      {sub && <p className={`tabular text-[11px] ${tone === "text-ink" ? "text-muted" : tone}`}>{sub}</p>}
+    </div>
+  );
+}
+
+/** The call for this chart: direction, odds, and the trade in rupees, with the two main actions. */
+function CallCard({ data, trade, onCalc, onOptions }: { data: StockDetail; trade: ChartTrade | null; onCalc: () => void; onOptions: () => void }) {
   const o = data.model_outlook;
+  const sig = data.signal;
+  const sc = sig.scenario;
   const training = o.status === "training";
   const v: Verdict | "TRAINING" = training ? "TRAINING" : (o.verdict ?? "NO EDGE");
-  const sc = data.signal.scenario;
+  // The model's call and the chart's rule setup can point opposite ways: say so instead of mixing them.
+  const conflict = trade && (v === "BUY" || v === "SELL") && trade.side !== v;
   return (
-    <section className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-xl border border-line bg-panel px-4 py-3">
-      <div className="flex items-center gap-3">
-        <span className={`rounded-lg px-3 py-1.5 text-lg font-bold ${VERDICT_STYLE[v]}`}>
-          {v === "BUY" ? "▲ BUY" : v === "SELL" ? "▼ SELL" : v === "TRAINING" ? "…" : v}
+    <section className="rounded-2xl border border-line bg-panel p-4 shadow-[0_1px_2px_rgba(16,24,40,0.04)] sm:p-5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <span className={`rounded-xl px-4 py-2 text-lg font-bold ${VERDICT_STYLE[v]}`}>
+          {v === "BUY" ? "▲ BUY" : v === "SELL" ? "▼ SELL" : v === "TRAINING" ? "Analysing…" : v}
         </span>
-        <div className="text-xs">
+        <div className="min-w-0">
           {o.status === "ok" && o.up_pct != null ? (
             <>
-              <p>
-                <b className="text-bull">{o.up_pct.toFixed(0)}% up</b> · <b className="text-bear">{(100 - o.up_pct).toFixed(0)}% down</b>
+              <p className="text-sm font-semibold">
+                <span className="text-bull">{o.up_pct.toFixed(0)}% up</span> <span className="text-faint">·</span>{" "}
+                <span className="text-bear">{(100 - o.up_pct).toFixed(0)}% down</span>
               </p>
-              <p className="text-faint">next {o.horizon_label} · {TIMEFRAME_LABEL[data.timeframe]} candles</p>
+              <p className="text-xs text-muted">
+                next {o.horizon_label} · {TIMEFRAME_LABEL[data.timeframe]} candles
+              </p>
             </>
           ) : (
-            <p className="max-w-xs text-muted">{o.message}</p>
+            <p className="max-w-sm text-xs text-muted">{o.message}</p>
           )}
         </div>
+        <SignalBadge signal={sig} />
+        <div className="ml-auto flex gap-2">
+          <button onClick={onCalc} className="inline-flex h-9 items-center gap-1.5 rounded-full border border-line px-4 text-sm font-semibold text-ink hover:border-accent/50">
+            <Calculator className="size-4" /> Calculator
+          </button>
+          <button onClick={onOptions} className="inline-flex h-9 items-center gap-1.5 rounded-full bg-accent px-4 text-sm font-semibold text-white hover:opacity-90">
+            <Layers3 className="size-4" /> Option chain
+          </button>
+        </div>
       </div>
-      {sc ? (
-        <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
-          <div>
-            <dt className="text-faint">{sc.direction === "long" ? "Buy zone" : "Sell zone"}</dt>
-            <dd className="tabular">{fmtPrice(sc.entry_low)}–{fmtPrice(sc.entry_high)}</dd>
-          </div>
-          <div>
-            <dt className="text-faint">Target</dt>
-            <dd className="tabular text-bull">{fmtPrice(sc.target)}</dd>
-          </div>
-          <div>
-            <dt className="text-faint">Stop-loss</dt>
-            <dd className="tabular text-bear">{fmtPrice(sc.stop_loss)}</dd>
-          </div>
-          <div>
-            <dt className="text-faint">Risk:Reward</dt>
-            <dd className="tabular">1 : {sc.risk_reward.toFixed(1)}</dd>
-          </div>
-        </dl>
-      ) : (
-        <p className="text-xs text-faint">No trade setup on this timeframe right now.</p>
+      {conflict && (
+        <p className="mt-3 rounded-xl bg-warn/10 px-3.5 py-2 text-sm text-warn">
+          Signals disagree: the model leans <b>{v}</b> but the chart setup below is a <b>{trade.side}</b>. Better to wait until they agree.
+        </p>
       )}
-      <button
-        onClick={onCalc}
-        className={`ml-auto inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${calcOpen ? "bg-accent/15 text-accent" : "bg-accent text-bg hover:bg-accent/90"}`}
-        disabled={!calculatorSetup(data, price)}
-      >
-        <Calculator className="size-3.5" /> Calculator
-      </button>
+      {trade && (
+        <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+          <Stat label={sc ? (trade.side === "BUY" ? "Buy around" : "Sell around") : `${trade.side} at (suggested)`} value={`₹${fmtPrice(trade.entry)}`} sub={trade.qty > 0 ? `Qty ${trade.qty}` : undefined} />
+          <Stat label="Target" value={`₹${fmtPrice(trade.target)}`} sub={trade.qty > 0 ? `+${inr(trade.profit)}` : undefined} tone="text-bull" />
+          <Stat label="Stop-loss" value={`₹${fmtPrice(trade.stop)}`} sub={trade.qty > 0 ? `−${inr(trade.loss)}` : undefined} tone="text-bear" />
+          <Stat label="Risk : reward" value={trade.rr != null ? `1 : ${trade.rr.toFixed(1)}` : "—"} sub={`capital ${inr(trade.capital)} · risk ${trade.riskPct}%`} />
+        </div>
+      )}
+      <HowItWorks>
+        <p>
+          {sc
+            ? `Levels from the ${TIMEFRAME_LABEL[data.timeframe].toLowerCase()} setup: ${sc.basis}.`
+            : "No confirmed setup on this timeframe, so the levels are suggestions: stop 1.5 ATR and target 2.5 ATR from the last close."}{" "}
+          Amounts are after Upstox charges for the quantity that risks your calculator&apos;s risk % of capital.
+        </p>
+        <p className="mt-1">
+          Support {fmtPrice(sig.levels.support)} · resistance {fmtPrice(sig.levels.resistance)}
+          {sig.no_trade_reasons.length > 0 && ` · NO TRADE because: ${sig.no_trade_reasons.join("; ")}`}
+        </p>
+      </HowItWorks>
     </section>
   );
 }
 
 // ---- detail tabs ------------------------------------------------------------
-const TABS = ["Trade plan", "Outlook", "Strategies", "Patterns", "News", "Signal details"] as const;
+const TABS = ["Overview", "Options", "Outlook", "Strategies", "Patterns", "News", "Details"] as const;
 type Tab = (typeof TABS)[number];
 
 export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string; initialTimeframe?: Timeframe }) {
   const [timeframe, setTimeframe] = useState<Timeframe>(initialTimeframe);
-  const [tab, setTab] = useState<Tab>("Trade plan");
-  const [calcOpen, setCalcOpen] = useState(false);
+  const [tab, setTab] = useState<Tab>("Overview");
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const openTab = (t: Tab) => {
+    setTab(t);
+    requestAnimationFrame(() => tabsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
   const { layers, toggle } = useLayers();
   const health = useHealth();
   const stream = useQuoteStream();
@@ -269,35 +308,39 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
   return (
     <>
       <AppHeader health={health.data} healthError={health.error} stream={stream.status} lastUpdate={stream.lastUpdate} alerts={stream.alerts} latestAlert={stream.latestAlert} />
-      <main className="mx-auto w-full min-w-0 max-w-[1600px] space-y-4 px-3 py-4 sm:px-6">
+      <main className="mx-auto w-full min-w-0 max-w-[1400px] space-y-5 px-3 py-5 sm:px-6">
         <StatusNotices health={health.data} healthError={health.error} streamError={stream.error} />
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="min-w-0">
-            <Link href="/" className="mb-1 inline-flex items-center gap-1 text-xs text-muted hover:text-ink">
-              <ArrowLeft className="size-3.5" /> Intraday desk
+            <Link href="/" className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-muted hover:text-ink">
+              <ArrowLeft className="size-3.5" /> Intraday
             </Link>
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-tight">{name}</h1>
-              <button onClick={() => watch.toggle(name)} aria-label={watch.has(name) ? "Remove from watchlist" : "Add to watchlist"} title="Watchlist" className="text-faint hover:text-warn">
+              <h1 className="text-2xl font-bold tracking-tight sm:text-[28px]">{name}</h1>
+              <button
+                onClick={() => watch.toggle(name)}
+                aria-label={watch.has(name) ? "Remove from watchlist" : "Add to watchlist"}
+                title={watch.has(name) ? "In your watchlist" : "Add to watchlist"}
+                className="grid size-8 place-items-center rounded-full text-faint hover:bg-panel-2 hover:text-warn"
+              >
                 <Star className={`size-5 ${watch.has(name) ? "fill-warn text-warn" : ""}`} />
               </button>
-              {sig && <SignalBadge signal={sig} />}
             </div>
-            <p className="truncate text-xs text-muted">
+            <p className="truncate text-sm text-muted">
               {data?.instrument.name ?? "…"} {data?.instrument.sector && `· ${data.instrument.sector}`}
             </p>
           </div>
           <div className="text-right">
-            <p className="tabular text-3xl font-semibold">{fmtPrice(quote?.last_price ?? data?.last_close)}</p>
-            <p className={`tabular text-sm ${changeColor(quote?.change)}`}>
+            <p className="tabular text-3xl font-bold tracking-tight sm:text-[34px]">₹{fmtPrice(quote?.last_price ?? data?.last_close)}</p>
+            <p className={`tabular text-sm font-semibold ${changeColor(quote?.change)}`}>
               {fmtSigned(quote?.change)} ({fmtPct(quote?.change_pct)})
             </p>
-            <div className="mt-0.5 flex items-center justify-end gap-2 text-[11px] text-faint">
+            <div className="mt-1 flex items-center justify-end gap-2 text-[11px] text-faint">
               <FreshnessBadge freshness={quote?.freshness} />
               {quote && (
                 <span className="hidden sm:inline">
-                  O {fmtPrice(quote.open)} · H {fmtPrice(quote.high)} · L {fmtPrice(quote.low)} · Vol {fmtCompact(quote.volume)}
+                  O {fmtPrice(quote.open)} · H {fmtPrice(quote.high)} · L {fmtPrice(quote.low)}
                 </span>
               )}
             </div>
@@ -305,17 +348,14 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
         </div>
 
         {error && !data && (
-          <div className="rounded-xl border border-bear/30 bg-bear/5 px-4 py-3 text-sm text-bear">
+          <div className="rounded-2xl border border-bear/30 bg-bear/5 px-4 py-3 text-sm text-bear">
             {error.status === 404 ? `${symbol} was not found on NSE.` : error.message}
           </div>
         )}
 
-        {data && <ActionBar data={data} price={quote?.last_price ?? null} onCalc={() => setCalcOpen((v) => !v)} calcOpen={calcOpen} />}
-        {calcOpen && setup && <TradeCalculator key={`${name}-${timeframe}`} setup={setup} onClose={() => setCalcOpen(false)} />}
-
-        <section className="rounded-xl border border-line bg-panel">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2">
-            <div className="flex max-w-full overflow-x-auto rounded-lg border border-line bg-panel-2 p-0.5" role="tablist" aria-label="Candle size">
+        <section className="overflow-hidden rounded-2xl border border-line bg-panel shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3 pt-3 sm:px-4">
+            <div className="flex max-w-full gap-1 overflow-x-auto" role="tablist" aria-label="Candle size">
               {TIMEFRAMES.map((tf) => (
                 <button
                   key={tf}
@@ -323,7 +363,7 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
                   aria-selected={tf === timeframe}
                   title={`${TIMEFRAME_LABEL[tf]} candles`}
                   onClick={() => setTimeframe(tf)}
-                  className={`tabular shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold ${tf === timeframe ? "bg-accent/15 text-accent" : "text-muted hover:text-ink"}`}
+                  className={`tabular h-8 shrink-0 rounded-full px-3 text-xs font-semibold ${tf === timeframe ? "bg-accent/10 text-accent" : "text-muted hover:bg-panel-2 hover:text-ink"}`}
                 >
                   {TIMEFRAME_SHORT[tf]}
                 </button>
@@ -336,7 +376,7 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
           </div>
           <div className="p-1 sm:p-2">
             {isLoading && !data ? (
-              <div className="h-[72vh] min-h-[460px] max-h-[900px] animate-pulse rounded-lg bg-panel-2" />
+              <div className="h-[68vh] min-h-[420px] max-h-[860px] animate-pulse rounded-xl bg-panel-2" />
             ) : data?.candles.length ? (
               <PriceChart
                 candles={data.candles}
@@ -368,47 +408,36 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
               !error && <p className="py-20 text-center text-sm text-faint">No candle data available.</p>
             )}
           </div>
-          <details className="border-t border-line px-3 py-2 text-[11px] text-muted">
-            <summary className="cursor-pointer text-faint hover:text-ink">
-              Legend · {sig?.bars ?? 0} completed candles · last {fmtTime(sig?.last_candle_time, true)} IST
-            </summary>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-              {CHART_LEGEND.map((l) => (
-                <span key={l.label} className="inline-flex items-center gap-1.5">
-                  <span className="h-0.5 w-3" style={{ background: l.color }} />
-                  {l.label}
-                </span>
-              ))}
-            </div>
-          </details>
         </section>
 
-        <div className="flex max-w-full gap-1 overflow-x-auto border-b border-line" role="tablist" aria-label="Details">
+        {data && <CallCard data={data} trade={trade} onCalc={() => openTab("Overview")} onOptions={() => openTab("Options")} />}
+
+        <div ref={tabsRef} className="flex max-w-full scroll-mt-20 gap-1 overflow-x-auto border-b border-line" role="tablist" aria-label="Details">
           {TABS.map((t) => (
             <button
               key={t}
               role="tab"
               aria-selected={t === tab}
               onClick={() => setTab(t)}
-              className={`shrink-0 border-b-2 px-3 py-2 text-sm font-medium ${t === tab ? "border-accent text-ink" : "border-transparent text-muted hover:text-ink"}`}
+              className={`shrink-0 border-b-2 px-3.5 py-2.5 text-sm font-semibold ${t === tab ? "border-accent text-accent" : "border-transparent text-muted hover:text-ink"}`}
             >
               {t}
             </button>
           ))}
         </div>
 
-        {data && tab === "Trade plan" && (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <div className="space-y-4">
-              {setup && <TradeCalculator key={`plan-${name}-${data.timeframe}-${setup.side}`} setup={setup} />}
-              <OptionChainPanel symbol={data.instrument.symbol} index={OPTION_SYMBOLS.includes(data.instrument.symbol)} />
-            </div>
-            <div className="space-y-4">
+        {data && tab === "Overview" && (
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+            {setup && <TradeCalculator key={`plan-${name}-${data.timeframe}-${setup.side}`} setup={setup} />}
+            <div className="space-y-5">
               {data.history && <TradeStatus history={data.history} quote={quote} timeframe={data.timeframe} />}
-              <ScenarioPanel data={data} />
               <RisksPanel risks={sig?.risks ?? []} />
             </div>
           </div>
+        )}
+
+        {data && tab === "Options" && (
+          <OptionChainPanel symbol={data.instrument.symbol} index={OPTION_SYMBOLS.includes(data.instrument.symbol)} />
         )}
 
         {data && tab === "Outlook" && (
@@ -438,7 +467,7 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
           </div>
         )}
 
-        {data && tab === "Signal details" && (
+        {data && tab === "Details" && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <Panel title="Why this signal?" action={sig && <ScoreBar score={sig.score} />}>
@@ -495,50 +524,14 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
         )}
 
         {data && (
-          <p className="text-xs text-faint">
-            Source: {data.source === "demo" ? "synthetic demo generator" : "Upstox Developer API"} · generated {fmtTime(data.generated_at, true)} IST ·{" "}
-            {TIMEFRAME_LABEL[data.timeframe]} candles · the current candle is drawn live from quotes; signals use completed candles only
+          <p className="text-[11px] text-faint">
+            {data.source === "demo" ? "Synthetic demo data" : "Upstox data"} · updated {fmtTime(data.generated_at, true)} IST · {sig?.bars ?? 0}{" "}
+            {TIMEFRAME_LABEL[data.timeframe].toLowerCase()} candles · signals use completed candles only
           </p>
         )}
       </main>
       <Disclaimer />
     </>
-  );
-}
-
-function ScenarioPanel({ data }: { data: StockDetail }) {
-  const sig = data.signal;
-  return (
-    <Panel title="Setup levels">
-      {sig.scenario ? (
-        <dl className="grid grid-cols-2 gap-y-1.5 text-sm">
-          <dt className="text-muted">Direction</dt>
-          <dd className={`text-right font-medium ${sig.scenario.direction === "long" ? "text-bull" : "text-bear"}`}>{sig.scenario.direction === "long" ? "BUY" : "SELL"}</dd>
-          <dt className="text-muted">Entry zone</dt>
-          <dd className="tabular text-right">
-            {fmtPrice(sig.scenario.entry_low)}–{fmtPrice(sig.scenario.entry_high)}
-          </dd>
-          <dt className="text-muted">Target</dt>
-          <dd className="tabular text-right text-bull">
-            {fmtPrice(sig.scenario.target)}
-            {sig.scenario.target_capped_by && <span className="text-xs text-faint"> ({sig.scenario.target_capped_by})</span>}
-          </dd>
-          <dt className="text-muted">Stop-loss</dt>
-          <dd className="tabular text-right text-bear">{fmtPrice(sig.scenario.stop_loss)}</dd>
-          <dt className="text-muted">Risk / reward</dt>
-          <dd className="tabular text-right">1 : {sig.scenario.risk_reward.toFixed(2)}</dd>
-          <dd className="col-span-2 mt-1 text-[11px] text-faint">{sig.scenario.basis}</dd>
-        </dl>
-      ) : (
-        <p className="text-sm text-faint">No setup: the signal did not pass the evidence and data-quality checks.</p>
-      )}
-      <dl className="mt-3 grid grid-cols-2 gap-y-1 border-t border-line pt-3 text-xs">
-        <dt className="text-muted">Support (swing)</dt>
-        <dd className="tabular text-right">{fmtPrice(sig.levels.support)}</dd>
-        <dt className="text-muted">Resistance (swing)</dt>
-        <dd className="tabular text-right">{fmtPrice(sig.levels.resistance)}</dd>
-      </dl>
-    </Panel>
   );
 }
 

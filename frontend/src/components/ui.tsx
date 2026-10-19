@@ -1,17 +1,34 @@
-import type { ReactNode } from "react";
+"use client";
+
+import { useState, type ReactNode } from "react";
+import { Info } from "lucide-react";
 import type { Freshness, Signal, SignalLabel } from "@/lib/types";
 
+/** Card: white (light) / raised (dark) surface with a quiet title row. */
 export function Panel({ title, action, children, className = "" }: { title?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={`rounded-xl border border-line bg-panel ${className}`}>
+    <section className={`rounded-2xl border border-line bg-panel shadow-[0_1px_2px_rgba(16,24,40,0.04)] ${className}`}>
       {title && (
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
-          <h2 className="text-sm font-semibold tracking-wide text-ink">{title}</h2>
+        <header className="flex flex-wrap items-center justify-between gap-3 px-5 pt-4 pb-1">
+          <h2 className="text-[15px] font-semibold text-ink">{title}</h2>
           {action}
         </header>
       )}
-      <div className="p-4">{children}</div>
+      <div className="px-5 pt-3 pb-5">{children}</div>
     </section>
+  );
+}
+
+/** "How this works" text kept out of the way until asked for. */
+export function HowItWorks({ children, label = "How this works" }: { children: ReactNode; label?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-3 text-xs">
+      <button onClick={() => setOpen((o) => !o)} className="inline-flex items-center gap-1 text-faint hover:text-accent" aria-expanded={open}>
+        <Info className="size-3.5" /> {open ? "Hide details" : label}
+      </button>
+      {open && <div className="mt-1.5 leading-relaxed text-muted">{children}</div>}
+    </div>
   );
 }
 

@@ -18,7 +18,7 @@ const VERDICT: Record<Verdict, { cls: string; ring: string; label: string }> = {
 export function OutlookCard({ outlook, timeframe }: { outlook: Outlook | undefined; timeframe: Timeframe }) {
   if (!outlook || outlook.status !== "ok" || outlook.up_pct == null || !outlook.verdict || !outlook.test) {
     return (
-      <section className="rounded-xl border border-line bg-panel px-5 py-4 text-sm text-muted">
+      <section className="rounded-2xl border border-line bg-panel px-5 py-4 text-sm text-muted">
         <span className="font-semibold text-ink">Combined outlook</span> · {outlook?.message ?? "Loading…"}
       </section>
     );

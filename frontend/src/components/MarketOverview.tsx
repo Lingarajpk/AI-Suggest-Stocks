@@ -19,7 +19,7 @@ export function IndexStrip({ quotes }: { quotes: Record<string, Quote> }) {
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
-            className="rounded-xl border border-line bg-panel px-4 py-3"
+            className="rounded-2xl border border-line bg-panel px-4 py-3"
           >
             <div className="flex items-center justify-between">
               <Link href={`/stock/${name.replace(/\s+/g, "")}?tf=5m`} className="text-xs font-medium tracking-wider text-muted hover:text-accent">
@@ -56,7 +56,7 @@ export function StatTiles({ scan }: { scan?: ScanResult }) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
       {tiles.map((t) => (
-        <div key={t.label} className="rounded-xl border border-line bg-panel px-4 py-3" title={t.hint}>
+        <div key={t.label} className="rounded-2xl border border-line bg-panel px-4 py-3" title={t.hint}>
           <p className="text-xs text-muted">{t.label}</p>
           <p className={`tabular mt-1 text-2xl font-semibold ${t.cls}`}>{t.value ?? "—"}</p>
         </div>

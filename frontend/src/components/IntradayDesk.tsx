@@ -14,13 +14,13 @@ import { IntradayChart } from "./IntradayChart";
 import { MarketNews } from "./NewsPanel";
 import { StatusNotices } from "./StatusNotices";
 import { TradeCalculator } from "./TradeCalculator";
-import { FreshnessBadge, Panel } from "./ui";
+import { FreshnessBadge, HowItWorks, Panel } from "./ui";
 
-const VERDICT: Record<IntradayVerdict, { label: string; text: string; ring: string; chip: string }> = {
-  BUY: { label: "▲ BUY", text: "text-bull", ring: "border-bull/60 from-bull/15", chip: "bg-bull text-bg" },
-  SELL: { label: "▼ SELL", text: "text-bear", ring: "border-bear/60 from-bear/15", chip: "bg-bear text-bg" },
-  WAIT: { label: "◆ WAIT", text: "text-warn", ring: "border-line from-warn/5", chip: "bg-warn/15 text-warn" },
-  "NO TRADE": { label: "NO TRADE", text: "text-muted", ring: "border-line from-muted/5", chip: "bg-muted/15 text-muted" },
+const VERDICT: Record<IntradayVerdict, { label: string; text: string; bar: string; chip: string }> = {
+  BUY: { label: "▲ BUY", text: "text-bull", bar: "bg-bull", chip: "bg-bull text-white" },
+  SELL: { label: "▼ SELL", text: "text-bear", bar: "bg-bear", chip: "bg-bear text-white" },
+  WAIT: { label: "WAIT", text: "text-warn", bar: "bg-warn", chip: "bg-warn/15 text-warn" },
+  "NO TRADE": { label: "NO TRADE", text: "text-muted", bar: "bg-line", chip: "bg-panel-2 text-muted" },
 };
 
 const SESSION_NOTE = {
@@ -36,7 +36,7 @@ function Leg({ leg, label }: { leg: IntradayLeg; label: string }) {
   const up = leg.up_pct;
   const tone = leg.lean > 0 ? "text-bull" : leg.lean < 0 ? "text-bear" : "text-muted";
   return (
-    <div className="min-w-0 flex-1 rounded-lg border border-line bg-panel-2/60 px-3 py-2">
+    <div className="min-w-0 flex-1 rounded-xl bg-panel-2 px-3 py-2.5">
       <p className="flex items-center justify-between text-[11px] text-muted">
         <span>{label}</span>
         <span className={tone}>{leg.lean > 0 ? "▲ up" : leg.lean < 0 ? "▼ down" : "— flat"}</span>
@@ -48,7 +48,7 @@ function Leg({ leg, label }: { leg: IntradayLeg; label: string }) {
             <span className="text-faint"> / </span>
             <span className="text-bear">{(100 - up).toFixed(0)}%</span>
           </p>
-          <div className="mt-1 flex h-1.5 overflow-hidden rounded-full bg-bear/60">
+          <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-bear/50">
             <div className="h-full bg-bull" style={{ width: `${up}%` }} />
           </div>
           <p className="mt-1 text-[10px] text-faint">up / down over {leg.horizon_label} · model</p>
@@ -72,7 +72,7 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
   );
   if (card.error) {
     return (
-      <section className="rounded-xl border border-line bg-panel p-4 text-sm">
+      <section className="rounded-2xl border border-line bg-panel p-5 text-sm">
         <p className="font-semibold">{sym}</p>
         <p className="mt-1 text-bear">{card.error}</p>
       </section>
@@ -86,18 +86,21 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
   const hit = card.verdict === "BUY" ? rel.buy_hit_pct : card.verdict === "SELL" ? rel.sell_hit_pct : null;
   const calls = card.verdict === "BUY" ? rel.buy_calls : card.verdict === "SELL" ? rel.sell_calls : null;
   return (
-    <section className={`flex min-w-0 flex-col rounded-xl border-2 bg-linear-to-b to-panel p-4 ${v.ring}`}>
+    <section className="relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-line bg-panel p-5 shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
+      <span className={`absolute inset-x-0 top-0 h-1 ${v.bar}`} />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold tracking-tight">{sym}</p>
-          <p className="tabular text-2xl font-semibold">{fmtPrice(price)}</p>
-          <p className={`tabular text-xs ${changeColor(quote?.change)}`}>
+          <Link href={`/stock/${slug(sym)}?tf=5m`} className="text-sm font-semibold text-muted hover:text-accent">
+            {sym}
+          </Link>
+          <p className="tabular text-[26px] leading-tight font-bold tracking-tight">{fmtPrice(price)}</p>
+          <p className={`tabular text-sm font-semibold ${changeColor(quote?.change)}`}>
             {fmtSigned(quote?.change)} ({fmtPct(quote?.change_pct)})
           </p>
         </div>
         <div className="text-right">
-          <span className={`inline-block rounded-lg px-3 py-1.5 text-xl font-bold tracking-tight ${v.chip}`}>{v.label}</span>
-          <p className="mt-1 flex items-center justify-end gap-1 text-[11px] text-faint">
+          <span className={`inline-block rounded-xl px-3.5 py-1.5 text-lg font-bold ${v.chip}`}>{v.label}</span>
+          <p className="mt-1.5 flex items-center justify-end gap-1 text-[11px] text-faint">
             <Clock className="size-3" />
             {card.since_known && card.since ? `since ${fmtTime(card.since)}` : `as of ${fmtTime(card.last_candle_time)}`}
           </p>
@@ -107,7 +110,7 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
         </div>
       </div>
 
-      <p className={`mt-2 text-sm ${v.text}`}>{card.reason}</p>
+      <p className="mt-3 text-sm text-muted">{card.reason}</p>
 
       <div className="mt-3 flex gap-2">
         <Leg leg={card.entry} label="5-min entry" />
@@ -115,39 +118,30 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
       </div>
 
       {lv ? (
-        <dl className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
-          <div className="rounded-md bg-panel-2/70 px-1 py-1.5">
-            <dt className="text-[10px] text-muted">Entry</dt>
-            <dd className="tabular">{fmtPrice((lv.entry_low + lv.entry_high) / 2)}</dd>
+        <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
+          <div className="rounded-xl bg-panel-2 px-1 py-2">
+            <dt className="text-[11px] text-muted">Entry</dt>
+            <dd className="tabular text-sm font-semibold">{fmtPrice((lv.entry_low + lv.entry_high) / 2)}</dd>
           </div>
-          <div className="rounded-md bg-bull/10 px-1 py-1.5">
-            <dt className="text-[10px] text-muted">Target</dt>
-            <dd className="tabular text-bull">{fmtPrice(lv.target)}</dd>
+          <div className="rounded-xl bg-bull/10 px-1 py-2">
+            <dt className="text-[11px] text-muted">Target</dt>
+            <dd className="tabular text-sm font-semibold text-bull">{fmtPrice(lv.target)}</dd>
           </div>
-          <div className="rounded-md bg-bear/10 px-1 py-1.5">
-            <dt className="text-[10px] text-muted">Stop</dt>
-            <dd className="tabular text-bear">{fmtPrice(lv.stop)}</dd>
-          </div>
-          <div className="rounded-md bg-panel-2/70 px-1 py-1.5">
-            <dt className="text-[10px] text-muted">Risk:Reward</dt>
-            <dd className="tabular">1 : {lv.risk_reward.toFixed(1)}</dd>
+          <div className="rounded-xl bg-bear/10 px-1 py-2">
+            <dt className="text-[11px] text-muted">Stop-loss</dt>
+            <dd className="tabular text-sm font-semibold text-bear">{fmtPrice(lv.stop)}</dd>
           </div>
         </dl>
       ) : (
-        <p className="mt-3 rounded-md bg-panel-2/60 px-3 py-2 text-xs text-muted">No entry, target or stop: wait for both timeframes to agree.</p>
+        <p className="mt-3 rounded-xl bg-panel-2 px-3.5 py-2.5 text-sm text-muted">No entry yet: wait for both timeframes to agree.</p>
       )}
       {card.action && card.action.label !== card.verdict && (
-        <p className={`mt-2 rounded-md px-3 py-2 text-xs font-semibold ${card.action.tone === "warn" ? "bg-warn/15 text-warn" : card.action.tone === "bull" ? "bg-bull/10 text-bull" : "bg-bear/10 text-bear"}`}>
+        <p className={`mt-2 rounded-xl px-3.5 py-2.5 text-sm font-semibold ${card.action.tone === "warn" ? "bg-warn/10 text-warn" : card.action.tone === "bull" ? "bg-bull/10 text-bull" : "bg-bear/10 text-bear"}`}>
           {card.action.label}: {card.action.text}
         </p>
       )}
-      {lv && (
-        <button onClick={() => setCalc((v) => !v)} className="mt-2 inline-flex items-center gap-1 self-start text-xs font-semibold text-accent hover:underline">
-          <Calculator className="size-3.5" /> {calc ? "Hide calculator" : "Position size & charges"}
-        </button>
-      )}
       {calc && lv && (card.verdict === "BUY" || card.verdict === "SELL") && (
-        <div className="mt-2">
+        <div className="mt-3">
           <TradeCalculator
             setup={{ symbol: sym, side: card.verdict, entry: +((lv.entry_low + lv.entry_high) / 2).toFixed(2), stop: lv.stop, target: lv.target, source: "this intraday call" }}
             onClose={() => setCalc(false)}
@@ -155,53 +149,62 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
         </div>
       )}
 
-      <div className="mt-3 -mx-1">
-        {card.chart ? <IntradayChart card={card} liveBar={liveBar} /> : <div className="h-[380px] animate-pulse rounded-lg bg-panel-2" />}
+      <div className="mt-3 -mx-2">
+        {card.chart ? <IntradayChart card={card} liveBar={liveBar} height={300} /> : <div className="h-[300px] animate-pulse rounded-xl bg-panel-2" />}
       </div>
 
-      <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
-        <dt className="text-muted">Session VWAP{card.instrument.kind === "index" ? " (avg price)" : ""}</dt>
-        <dd className="tabular text-right">
-          {fmtPrice(card.session_vwap)} {vwapSide && <span className={vwapSide === "above" ? "text-bull" : "text-bear"}>· price {vwapSide}</span>}
-        </dd>
-        <dt className="text-muted">Supertrend (5-min)</dt>
-        <dd className={`text-right ${card.supertrend.dir === 1 ? "text-bull" : card.supertrend.dir === -1 ? "text-bear" : ""}`}>
-          {card.supertrend.dir === 1 ? "up" : card.supertrend.dir === -1 ? "down" : "—"} at {fmtPrice(card.supertrend.line)}
-        </dd>
-        <dt className="text-muted">Support / resistance</dt>
-        <dd className="tabular text-right">
-          {fmtPrice(card.support)} / {fmtPrice(card.resistance)}
-        </dd>
-        <dt className="text-muted">ATR (5-min)</dt>
-        <dd className="tabular text-right">{fmtPrice(card.atr)}</dd>
-      </dl>
+      <HowItWorks label="More details">
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-1">
+          <dt>Session VWAP{card.instrument.kind === "index" ? " (avg price)" : ""}</dt>
+          <dd className="tabular text-right text-ink">
+            {fmtPrice(card.session_vwap)} {vwapSide && <span className={vwapSide === "above" ? "text-bull" : "text-bear"}>· price {vwapSide}</span>}
+          </dd>
+          <dt>Supertrend (5-min)</dt>
+          <dd className={`text-right ${card.supertrend.dir === 1 ? "text-bull" : card.supertrend.dir === -1 ? "text-bear" : ""}`}>
+            {card.supertrend.dir === 1 ? "up" : card.supertrend.dir === -1 ? "down" : "—"} at {fmtPrice(card.supertrend.line)}
+          </dd>
+          <dt>Support / resistance</dt>
+          <dd className="tabular text-right text-ink">
+            {fmtPrice(card.support)} / {fmtPrice(card.resistance)}
+          </dd>
+          <dt>ATR (5-min) · Risk:Reward</dt>
+          <dd className="tabular text-right text-ink">
+            {fmtPrice(card.atr)} · {lv ? `1 : ${lv.risk_reward.toFixed(1)}` : "—"}
+          </dd>
+        </dl>
+        {(card.strategies_long.length > 0 || card.strategies_short.length > 0) && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {card.strategies_long.map((s) => (
+              <span key={`l-${s}`} className="rounded-full bg-bull/10 px-2 py-0.5 text-[11px] text-bull">▲ {s}</span>
+            ))}
+            {card.strategies_short.map((s) => (
+              <span key={`s-${s}`} className="rounded-full bg-bear/10 px-2 py-0.5 text-[11px] text-bear">▼ {s}</span>
+            ))}
+          </div>
+        )}
+        <p className="mt-2">
+          {hit != null && calls ? (
+            <>
+              On unseen data, 5-min {card.verdict} calls were right <b className="text-ink">{hit}%</b> of {calls.toLocaleString()} (price rose{" "}
+              {rel.base_up_pct}% of the time anyway).
+            </>
+          ) : rel.skill_pct != null ? (
+            <>5-min model skill vs guessing on unseen data: {rel.skill_pct > 0 ? "+" : ""}{rel.skill_pct}%.</>
+          ) : null}
+        </p>
+      </HowItWorks>
+      {card.risks.length > 0 && <p className="mt-2 text-xs text-warn">⚠ {card.risks[0]}</p>}
 
-      {(card.strategies_long.length > 0 || card.strategies_short.length > 0) && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {card.strategies_long.map((s) => (
-            <span key={`l-${s}`} className="rounded bg-bull/10 px-1.5 py-0.5 text-[10px] text-bull">▲ {s}</span>
-          ))}
-          {card.strategies_short.map((s) => (
-            <span key={`s-${s}`} className="rounded bg-bear/10 px-1.5 py-0.5 text-[10px] text-bear">▼ {s}</span>
-          ))}
-        </div>
-      )}
-
-      <p className="mt-2 text-[11px] text-faint">
-        {hit != null && calls ? (
-          <>
-            On unseen data, 5-min {card.verdict} calls were right <b className="text-ink">{hit}%</b> of {calls.toLocaleString()} (price rose{" "}
-            {rel.base_up_pct}% of the time anyway).
-          </>
-        ) : rel.skill_pct != null ? (
-          <>5-min model skill vs guessing on unseen data: {rel.skill_pct > 0 ? "+" : ""}{rel.skill_pct}%.</>
-        ) : null}
-        {card.risks.length > 0 && <span className="block text-warn">⚠ {card.risks[0]}</span>}
-      </p>
-
-      <Link href={`/stock/${slug(sym)}?tf=5m`} className="mt-auto inline-flex items-center gap-1 pt-3 text-xs text-accent hover:underline">
-        <Maximize2 className="size-3" /> Full chart, strategies & news
-      </Link>
+      <div className="mt-auto flex gap-2 pt-4">
+        {lv && (
+          <button onClick={() => setCalc((x) => !x)} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full border border-line text-sm font-semibold hover:border-accent/50">
+            <Calculator className="size-4" /> {calc ? "Hide calculator" : "Calculator"}
+          </button>
+        )}
+        <Link href={`/stock/${slug(sym)}?tf=5m`} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full bg-accent text-sm font-semibold text-white hover:opacity-90">
+          <Maximize2 className="size-4" /> Open chart
+        </Link>
+      </div>
     </section>
   );
 }
@@ -221,7 +224,7 @@ function StockCalls({ title, rows, side, quotes }: { title: string; rows: Intrad
         <p className="text-sm text-faint">No stock has 5-min and 15-min agreeing on a {side} right now.</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[520px] text-xs">
+          <table className="w-full min-w-[520px] text-sm">
             <thead className="text-left text-muted">
               <tr className="border-b border-line">
                 <th className="py-1.5 pr-2 font-medium">Stock</th>
@@ -238,9 +241,9 @@ function StockCalls({ title, rows, side, quotes }: { title: string; rows: Intrad
               {rows.map((r) => {
                 const q = quotes[r.instrument.symbol] ?? r.quote;
                 return (
-                  <tr key={r.instrument.symbol} className="border-b border-line/60">
+                  <tr key={r.instrument.symbol} className="border-b border-line/60 last:border-0 hover:bg-panel-2/60">
                     <td className="py-1.5 pr-2">
-                      <Link href={`/stock/${r.instrument.symbol}?tf=5m`} className="font-medium hover:text-accent">
+                      <Link href={`/stock/${r.instrument.symbol}?tf=5m`} className="font-semibold hover:text-accent">
                         {r.instrument.symbol}
                       </Link>
                     </td>
@@ -267,7 +270,7 @@ function DeskUnavailable({ status, code, message }: { status: number; code: stri
   const offline = status === 401;
   const waking = code === "backend_waking" || code === "backend_unreachable";
   return (
-    <div className="flex flex-col items-center gap-2 rounded-xl border border-line bg-panel px-6 py-14 text-center">
+    <div className="flex flex-col items-center gap-2 rounded-2xl border border-line bg-panel px-6 py-14 text-center">
       <p className="text-lg font-semibold">
         {offline ? "Live data is offline" : waking ? "Waking up the data server…" : "The intraday desk could not load"}
       </p>
@@ -297,24 +300,27 @@ export function IntradayDesk() {
 
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-              <Zap className="size-5 text-accent" /> Intraday desk
+            <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+              <Zap className="size-5 text-accent" /> Intraday
             </h1>
-            <p className="text-xs text-muted">5-minute entry timing, confirmed by the 15-minute trend · indices first</p>
+            <p className="text-sm text-muted">Index calls from 5-minute timing confirmed by the 15-minute trend</p>
           </div>
-          <p className="text-xs text-faint">{data ? `Updated ${fmtTime(data.generated_at)} IST · refreshes every 20 s` : "Loading…"}</p>
+          <p className="text-xs text-faint">{data ? `Updated ${fmtTime(data.generated_at)} IST` : "Loading…"}</p>
         </div>
 
-        {note && <p className="rounded-lg border border-warn/30 bg-warn/5 px-4 py-2 text-xs text-warn">{note}</p>}
+        {note && <p className="rounded-xl bg-warn/10 px-4 py-2.5 text-sm text-warn">{note}</p>}
 
         {!data && error ? (
           <DeskUnavailable status={error.status} code={error.code} message={error.message} />
         ) : (
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 xl:grid-cols-3">
             {!data
               ? [0, 1, 2].map((i) => (
-                  <div key={i} className="flex h-[720px] items-start justify-center rounded-xl border border-line bg-panel p-6 text-xs text-faint">
-                    <span className="animate-pulse">Loading {["NIFTY 50", "BANK NIFTY", "SENSEX"][i]}…</span>
+                  <div key={i} className="space-y-3 rounded-2xl border border-line bg-panel p-5">
+                    <p className="text-sm font-semibold text-muted">{["NIFTY 50", "BANK NIFTY", "SENSEX"][i]}</p>
+                    <div className="h-8 w-40 animate-pulse rounded-lg bg-panel-2" />
+                    <div className="h-16 animate-pulse rounded-xl bg-panel-2" />
+                    <div className="h-[300px] animate-pulse rounded-xl bg-panel-2" />
                   </div>
                 ))
               : data.indices.length === 0
@@ -331,8 +337,8 @@ export function IntradayDesk() {
 
         {data?.stocks && (
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-            <StockCalls title="Stocks · intraday BUY" rows={data.stocks.buy} side="BUY" quotes={stream.quotes} />
-            <StockCalls title="Stocks · intraday SELL" rows={data.stocks.sell} side="SELL" quotes={stream.quotes} />
+            <StockCalls title="Stocks to BUY" rows={data.stocks.buy} side="BUY" quotes={stream.quotes} />
+            <StockCalls title="Stocks to SELL" rows={data.stocks.sell} side="SELL" quotes={stream.quotes} />
           </div>
         )}
         {data?.stocks && (
@@ -344,9 +350,9 @@ export function IntradayDesk() {
         <MarketNews />
 
         {data && (
-          <p className="text-xs text-faint">
-            <b className="text-muted">How the call is made:</b> {data.method} Source: {data.source === "demo" ? "synthetic demo data" : "Upstox"}.
-          </p>
+          <HowItWorks label="How the calls are made">
+            {data.method} Source: {data.source === "demo" ? "synthetic demo data" : "Upstox"}.
+          </HowItWorks>
         )}
       </main>
       <Disclaimer />
