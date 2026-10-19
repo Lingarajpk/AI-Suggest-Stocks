@@ -26,7 +26,7 @@ import pandas as pd
 from app.analysis import candles as cs
 from app.analysis import indicators as ta
 from app.analysis import volume_profile as vp
-from app.analysis.history import simulate_trades
+from app.analysis.history import profit_factor, simulate_trades
 from app.analysis.signals import MIN_BARS
 from app.models import is_intraday
 
@@ -407,11 +407,11 @@ def _event(df: pd.DataFrame, s: pd.Series) -> dict | None:
 
 # ---- backtest -------------------------------------------------------------
 def _empty() -> dict:
-    return {"buy_n": 0, "buy_hit": 0, "sell_n": 0, "sell_hit": 0, "ret": [], "pnl": [], "base_up": 0, "base_n": 0}
+    return {"buy_n": 0, "buy_hit": 0, "sell_n": 0, "sell_hit": 0, "ret": [], "pnl": [], "gross": [], "base_up": 0, "base_n": 0}
 
 
-def raw_stats(df: pd.DataFrame, ind: pd.DataFrame, res: dict, horizon: int) -> dict[str, dict]:
-    """Per strategy and candlestick: direction hit rate after `horizon` bars and simulated trades."""
+def raw_stats(df: pd.DataFrame, ind: pd.DataFrame, res: dict, horizon: int, cost_pct: float = 0.0) -> dict[str, dict]:
+    """Per strategy and candlestick: direction hit rate after `horizon` bars and simulated trades (net of cost_pct)."""
     close = df["close"]
     fwd = (close.shift(-horizon) / close - 1) * 100
     valid = pd.Series(np.arange(len(df)) >= MIN_BARS, index=df.index)
@@ -429,8 +429,9 @@ def raw_stats(df: pd.DataFrame, ind: pd.DataFrame, res: dict, horizon: int) -> d
         acc["buy_n"], acc["buy_hit"] = int(len(rb)), int((rb > 0).sum())
         acc["sell_n"], acc["sell_hit"] = int(len(rs)), int((rs < 0).sum())
         acc["ret"] = [float(x) for x in rb] + [float(-x) for x in rs]
-        trades, _ = simulate_trades(df, ind, b, s)
+        trades, _ = simulate_trades(df, ind, b, s, cost_pct)
         acc["pnl"] = [float(t["pnl_pct"]) for t in trades]
+        acc["gross"] = [float(t["gross_pnl_pct"]) for t in trades]
         out[key] = acc
     return out
 
@@ -444,6 +445,7 @@ def merge_stats(raw: list[dict[str, dict]]) -> dict[str, dict]:
                 a[f] += v[f]
             a["ret"] += v["ret"]
             a["pnl"] += v["pnl"]
+            a["gross"] += v.get("gross", v["pnl"])
     return {k: finalize(v) for k, v in acc.items()}
 
 
@@ -463,7 +465,9 @@ def finalize(a: dict) -> dict:
         "avg_move_pct": round(sum(a["ret"]) / len(a["ret"]), 2) if a["ret"] else None,
         "trades": len(pnl),
         "trade_win_rate": round(100 * sum(p > 0 for p in pnl) / len(pnl), 1) if pnl else None,
-        "avg_trade_pct": round(sum(pnl) / len(pnl), 2) if pnl else None,
+        "avg_trade_pct": round(sum(pnl) / len(pnl), 2) if pnl else None,  # net of costs
+        "gross_avg_trade_pct": round(sum(a["gross"]) / len(a["gross"]), 2) if a.get("gross") else None,
+        "profit_factor": profit_factor(pnl),
     }
 
 

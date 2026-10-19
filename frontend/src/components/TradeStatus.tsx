@@ -124,18 +124,48 @@ export function TradeStatus({ history, quote, timeframe }: { history: SignalHist
               <div key={side} className="rounded-md border border-line px-2 py-1.5">
                 <p className={`font-semibold ${side === "buy" ? "text-bull" : "text-bear"}`}>Past {side.toUpperCase()} trades</p>
                 {st.count ? (
-                  <p className="tabular text-muted">
-                    {st.count} trades · {st.win_rate}% profitable · avg {fmtPct(st.avg_pnl_pct)}
-                  </p>
+                  <>
+                    <p className="tabular text-muted">
+                      {st.count} trades · {st.win_rate}% profitable · avg{" "}
+                      <span className={(st.avg_pnl_pct ?? 0) < 0 ? "text-bear" : "text-ink"}>{fmtPct(st.avg_pnl_pct)}</span> after costs
+                      {st.gross_avg_pnl_pct != null && <span className="text-faint"> ({fmtPct(st.gross_avg_pnl_pct)} before)</span>}
+                    </p>
+                    <p className="tabular text-faint">
+                      PF {st.profit_factor ?? "—"} · max DD {st.max_drawdown_pct != null ? `${st.max_drawdown_pct}%` : "—"} · Sharpe{" "}
+                      {st.sharpe ?? "—"}
+                      {st.avg_win_pct != null && st.avg_loss_pct != null && ` · win ${fmtPct(st.avg_win_pct)} / loss ${fmtPct(st.avg_loss_pct)}`}
+                    </p>
+                    <EquitySparkline points={st.equity} />
+                  </>
                 ) : (
                   <p className="text-faint">none</p>
                 )}
               </div>
             );
           })}
-          <p className="col-span-2 text-faint">{stats.rules} Not investment advice.</p>
+          <p className="col-span-2 text-faint">
+            {stats.rules} PF = profit factor (gains ÷ losses, above 1 makes money); DD = worst fall from a peak. Not investment advice.
+          </p>
         </div>
       )}
     </Panel>
+  );
+}
+
+/** Compounded equity after each past trade; red when it ends below where it started. */
+function EquitySparkline({ points }: { points: [string, number][] }) {
+  if (!points || points.length < 2) return null;
+  const vals = [0, ...points.map((p) => p[1])];
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const span = hi - lo || 1;
+  const w = 160, h = 28;
+  const xy = vals.map((v, i) => `${((i / (vals.length - 1)) * w).toFixed(1)},${(h - ((v - lo) / span) * h).toFixed(1)}`).join(" ");
+  const zero = h - ((0 - lo) / span) * h;
+  const up = vals[vals.length - 1] >= 0;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="mt-1 h-7 w-full" preserveAspectRatio="none" role="img" aria-label="Equity curve of past trades">
+      <line x1="0" x2={w} y1={zero} y2={zero} className="stroke-line" strokeDasharray="2 2" strokeWidth="1" />
+      <polyline points={xy} fill="none" className={up ? "stroke-bull" : "stroke-bear"} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    </svg>
   );
 }

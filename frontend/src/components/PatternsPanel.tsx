@@ -29,7 +29,7 @@ function Measured({ s, label }: { s: PatternStats | undefined; label: string }) 
   return (
     <span className={few ? "text-faint" : "text-muted"}>
       {label}: target reached <b className="tabular text-ink">{s.success_rate}%</b> of {s.resolved} breakouts · profitable{" "}
-      {s.profitable_rate}% · avg {fmtPct(s.avg_pnl_pct)}
+      {s.profitable_rate}% · avg {fmtPct(s.avg_pnl_pct)} after costs
       {few && " (too few to judge)"}
     </span>
   );
@@ -212,7 +212,8 @@ export function PatternStatsTable({ timeframe }: { timeframe: Timeframe }) {
                 <th className="py-1.5 pr-2 text-right font-medium">Breakouts</th>
                 <th className="py-1.5 pr-2 text-right font-medium">Target hit</th>
                 <th className="py-1.5 pr-2 text-right font-medium">Profitable</th>
-                <th className="py-1.5 pr-2 text-right font-medium">Avg P&amp;L</th>
+                <th className="py-1.5 pr-2 text-right font-medium" title="Average after estimated Upstox charges and slippage">Avg P&amp;L (net)</th>
+                <th className="py-1.5 pr-2 text-right font-medium" title="Profit factor: total gains ÷ total losses after costs (above 1 makes money)">PF</th>
                 <th className="py-1.5 text-right font-medium" title="Breakouts on above-average volume only">
                   Vol-confirmed hit
                 </th>
@@ -232,7 +233,10 @@ export function PatternStatsTable({ timeframe }: { timeframe: Timeframe }) {
                     <td className="tabular py-1 pr-2 text-right">{r.resolved}</td>
                     <td className="tabular py-1 pr-2 text-right">{r.success_rate == null ? "—" : `${r.success_rate}%`}</td>
                     <td className="tabular py-1 pr-2 text-right">{r.profitable_rate == null ? "—" : `${r.profitable_rate}%`}</td>
-                    <td className={`tabular py-1 pr-2 text-right ${(r.avg_pnl_pct ?? 0) >= 0 ? "" : "text-bear"}`}>{fmtPct(r.avg_pnl_pct)}</td>
+                    <td className={`tabular py-1 pr-2 text-right ${(r.avg_pnl_pct ?? 0) >= 0 ? "" : "text-bear"}`} title={`before costs ${fmtPct(r.gross_avg_pnl_pct)}`}>
+                      {fmtPct(r.avg_pnl_pct)}
+                    </td>
+                    <td className={`tabular py-1 pr-2 text-right ${r.profit_factor != null && r.profit_factor < 1 ? "text-bear" : ""}`}>{r.profit_factor ?? "—"}</td>
                     <td className="tabular py-1 text-right">
                       {r.volume_confirmed_success_rate == null ? "—" : `${r.volume_confirmed_success_rate}% (${r.volume_confirmed_n})`}
                     </td>

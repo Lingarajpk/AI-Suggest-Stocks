@@ -4,8 +4,8 @@ The same rule-based score used for the live signal is computed for every past ba
 A BUY point is where the score crosses up into bullish (>= +20); a SELL point is where
 it crosses down into bearish (<= -20). Each point is then checked against what the
 price actually did over the next few bars, and compared with the base rate (how often
-price rose over the same horizon on any bar). These are in-sample statistics on the
-displayed history, before brokerage, taxes and slippage.
+price rose over the same horizon on any bar). Direction hit rates are before costs; simulated
+trades are net of estimated Upstox charges and slippage (see costs.py). In-sample statistics.
 """
 
 import math
@@ -13,6 +13,7 @@ import math
 import numpy as np
 import pandas as pd
 
+from app.analysis.costs import COST_NOTE
 from app.analysis.signals import MIN_BARS, WEIGHTS
 from app.models import Timeframe
 
@@ -67,8 +68,11 @@ EXIT_TEXT = {
 }
 
 
-def simulate_trades(df: pd.DataFrame, ind: pd.DataFrame, buy: pd.Series, sell: pd.Series) -> tuple[list[dict], dict | None]:
+def simulate_trades(df: pd.DataFrame, ind: pd.DataFrame, buy: pd.Series, sell: pd.Series,
+                    cost_pct: float = 0.0) -> tuple[list[dict], dict | None]:
     """Follow each BUY/SELL signal until it exits; return (closed trades, open trade or None).
+
+    pnl_pct is net of `cost_pct` (one round trip of charges and slippage, in %); gross_pnl_pct is before.
 
     Entry at the signal candle's close. From the next candle on, the first rule that applies exits:
       stop    - price touches entry -/+ 1.5 x ATR (filled at the stop, or the open if it gaps through)
@@ -85,13 +89,16 @@ def simulate_trades(df: pd.DataFrame, ind: pd.DataFrame, buy: pd.Series, sell: p
 
     def close_pos(i: int, price: float, reason: str) -> None:
         d = 1 if pos["side"] == "buy" else -1
+        gross = float(d * (price / pos["entry_price"] - 1) * 100)
         trades.append({
             **{k: v for k, v in pos.items() if k != "i"},
             "exit_time": idx[i].isoformat(),
             "exit_price": round(float(price), 2),
             "reason": reason,
             "reason_text": EXIT_TEXT[reason][pos["side"]],
-            "pnl_pct": round(float(d * (price / pos["entry_price"] - 1) * 100), 2),
+            "gross_pnl_pct": round(gross, 2),
+            "cost_pct": round(cost_pct, 3),
+            "pnl_pct": round(gross - cost_pct, 2),
             "bars_held": i - pos["i"],
         })
 
@@ -141,28 +148,90 @@ def simulate_trades(df: pd.DataFrame, ind: pd.DataFrame, buy: pd.Series, sell: p
             **{k: v for k, v in pos.items() if k != "i"},
             "bars_held": last - pos["i"],
             "last_close": round(float(o_close[last]), 2),
-            "pnl_pct": round(float(d * (o_close[last] / pos["entry_price"] - 1) * 100), 2),
+            "pnl_pct": round(float(d * (o_close[last] / pos["entry_price"] - 1) * 100) - cost_pct, 2),
             "status": "weakening" if warnings else "holding",
             "warnings": warnings,
         }
     return trades, open_trade
 
 
-def trade_stats(trades: list[dict]) -> dict:
+def profit_factor(pnl: list[float]) -> float | None:
+    """Sum of winning trades / sum of losing trades (None when there are no losses)."""
+    gain = sum(p for p in pnl if p > 0)
+    loss = -sum(p for p in pnl if p < 0)
+    return round(gain / loss, 2) if loss > 0 else None
+
+
+def sqn(pnl: list[float]) -> float | None:
+    """Van Tharp's system quality number: mean / std of trade results x sqrt(trades, capped at 100)."""
+    if len(pnl) < 2:
+        return None
+    sd = float(np.std(pnl, ddof=1))
+    return round(float(np.mean(pnl)) / sd * math.sqrt(min(len(pnl), 100)), 2) if sd > 0 else None
+
+
+def equity_curve(trades: list[dict]) -> tuple[list[list], float | None]:
+    """Compounded equity (% gain from the start) after each trade, and the max drawdown in %."""
+    eq, peak, worst, points = 1.0, 1.0, 0.0, []
+    for t in sorted(trades, key=lambda x: x["exit_time"]):
+        eq *= 1 + float(t["pnl_pct"]) / 100
+        peak = max(peak, eq)
+        worst = min(worst, eq / peak - 1)
+        points.append([t["exit_time"], round((eq - 1) * 100, 2)])
+    return points, (round(worst * 100, 2) if trades else None)
+
+
+def _day(iso: str) -> pd.Timestamp:
+    t = pd.Timestamp(iso)
+    return (t.tz_localize(None) if t.tzinfo else t).normalize()
+
+
+def sharpe(trades: list[dict], min_days: int = 20) -> float | None:
+    """Annualised Sharpe of daily equity returns (days without an exit count as 0%), risk-free 0."""
     if not trades:
-        return {"count": 0, "wins": 0, "win_rate": None, "avg_pnl_pct": None, "total_pnl_pct": None}
+        return None
+    days = pd.bdate_range(min(_day(t["entry_time"]) for t in trades), max(_day(t["exit_time"]) for t in trades))
+    if len(days) < min_days:
+        return None
+    daily = pd.Series(0.0, index=days)
+    for t in trades:
+        d = _day(t["exit_time"])
+        if d in daily.index:
+            daily[d] = (1 + daily[d]) * (1 + float(t["pnl_pct"]) / 100) - 1
+    sd = float(daily.std(ddof=1))
+    return round(float(daily.mean()) / sd * math.sqrt(252), 2) if sd > 0 else None
+
+
+def trade_stats(trades: list[dict]) -> dict:
+    """Net results (after costs) of simulated trades, with risk measures and the equity curve."""
+    if not trades:
+        return {"count": 0, "wins": 0, "win_rate": None, "avg_pnl_pct": None, "total_pnl_pct": None,
+                "gross_avg_pnl_pct": None, "cost_pct": None, "avg_win_pct": None, "avg_loss_pct": None,
+                "profit_factor": None, "max_drawdown_pct": None, "sharpe": None, "sqn": None, "equity": []}
     pnl = [float(t["pnl_pct"]) for t in trades]
-    wins = int(sum(p > 0 for p in pnl))
+    gross = [float(t.get("gross_pnl_pct", t["pnl_pct"])) for t in trades]
+    won = [p for p in pnl if p > 0]
+    lost = [p for p in pnl if p <= 0]
+    points, max_dd = equity_curve(trades)
     return {
         "count": len(trades),
-        "wins": wins,
-        "win_rate": round(100 * wins / len(trades), 1),
-        "avg_pnl_pct": round(sum(pnl) / len(pnl), 2),
+        "wins": len(won),
+        "win_rate": round(100 * len(won) / len(trades), 1),
+        "avg_pnl_pct": round(sum(pnl) / len(pnl), 2),  # expectancy per trade, net of costs
         "total_pnl_pct": round(sum(pnl), 2),
+        "gross_avg_pnl_pct": round(sum(gross) / len(gross), 2),
+        "cost_pct": round(float(trades[0].get("cost_pct", 0.0)), 3),
+        "avg_win_pct": round(sum(won) / len(won), 2) if won else None,
+        "avg_loss_pct": round(sum(lost) / len(lost), 2) if lost else None,
+        "profit_factor": profit_factor(pnl),
+        "max_drawdown_pct": max_dd,
+        "sharpe": sharpe(trades),
+        "sqn": sqn(pnl),
+        "equity": points,
     }
 
 
-def signal_history(df: pd.DataFrame, ind: pd.DataFrame, timeframe: Timeframe, with_markers: bool) -> dict:
+def signal_history(df: pd.DataFrame, ind: pd.DataFrame, timeframe: Timeframe, with_markers: bool, cost_pct: float = 0.0) -> dict:
     score = score_series(df, ind)
     valid = pd.Series(np.arange(len(df)) >= MIN_BARS, index=df.index) & score.notna()
     prev = score.shift()
@@ -194,7 +263,8 @@ def signal_history(df: pd.DataFrame, ind: pd.DataFrame, timeframe: Timeframe, wi
         "base_rate_up_pct": round(100 * float((base > 0).mean()), 1) if len(base) else None,
         "period_start": df.index[MIN_BARS].isoformat() if len(df) > MIN_BARS else None,
         "period_end": df.index[-1].isoformat(),
-        "notes": "In-sample, before brokerage, taxes and slippage. Past hit rates do not guarantee future results.",
+        "notes": f"In-sample. Hit rates are direction only (before costs); trades are {COST_NOTE}. "
+                 "Past results do not guarantee future results.",
     }
     events = df.index[buy | sell]
     last = events[-1] if len(events) else None
@@ -203,12 +273,13 @@ def signal_history(df: pd.DataFrame, ind: pd.DataFrame, timeframe: Timeframe, wi
         if last is not None
         else None
     )
-    trades, open_trade = simulate_trades(df, ind, buy, sell)
+    trades, open_trade = simulate_trades(df, ind, buy, sell, cost_pct)
     result["trades"] = {
         "buy": trade_stats([t for t in trades if t["side"] == "buy"]),
         "sell": trade_stats([t for t in trades if t["side"] == "sell"]),
         "rules": "Entry at the signal candle close; exit on stop (1.5 ATR), target (2.5 ATR), trend reversal "
-                 "(close through EMA20 with MACD flipped) or opposite signal. Before costs.",
+                 f"(close through EMA20 with MACD flipped) or opposite signal. Results {COST_NOTE}.",
+        "cost_pct": round(cost_pct, 3),
     }
     result["open_trade"] = open_trade
     result["latest_exit"] = trades[-1] if trades else None

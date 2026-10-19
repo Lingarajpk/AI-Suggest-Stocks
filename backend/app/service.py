@@ -10,6 +10,7 @@ from app.analysis import indicators as ta
 from app.analysis import patterns as pt
 from app.analysis import probability as pb
 from app.analysis import strategies as sx
+from app.analysis.costs import COST_NOTE, cost_for
 from app.analysis.history import HORIZON
 from app.analysis.history import signal_history
 from app.analysis.signals import evaluate
@@ -223,7 +224,8 @@ class MarketService:
             h, h_label = HORIZON[timeframe]
 
             def work():
-                return sx.merge_stats([sx.raw_stats(df, ind, res, h) for _, df, ind, _, res in frames])
+                return sx.merge_stats([sx.raw_stats(df, ind, res, h, cost_for(timeframe, inst.kind))
+                                       for inst, df, ind, _, res in frames])
 
             merged = await asyncio.to_thread(work)
             payload = {
@@ -238,7 +240,7 @@ class MarketService:
                 "method": f"Hit rate = share of signals where price moved the signalled way over the next {h_label}, versus "
                           "the base rate (how often it moved that way on any candle). Trades use the main signal's rules: "
                           "entry at the signal close, stop 1.5 ATR, target 2.5 ATR, or exit on a trend reversal. "
-                          "Pooled over the universe, in-sample, before costs and slippage.",
+                          f"Pooled over the universe, in-sample. Hit rates are direction only; trade results are {COST_NOTE}.",
             }
             self._strategy_stats[timeframe] = (now_ist(), payload)
             return payload
@@ -255,12 +257,11 @@ class MarketService:
                 return hit[1]
             frames, errors = await self._universe_frames(timeframe)
             used = len(frames)
-            merged = pt.merge_stats([pt.raw_stats(items) for _, _, _, items, _ in frames])
+            merged = pt.merge_stats([pt.raw_stats(items, cost_for(timeframe, inst.kind)) for inst, _, _, items, _ in frames])
             rows = []
             for k, (name, bias, kind, stars) in pt.CATALOG.items():
                 rows.append({"key": k, "name": name, "bias": bias, "kind": kind, "stars": stars, "rule": pt.RULES[k],
-                             **(merged.get(k) or pt.finalize({"detected": 0, "failed": 0, "wins": 0, "losses": 0, "expired": 0,
-                                                              "pnl": [], "vol_wins": 0, "vol_n": 0}))})
+                             **(merged.get(k) or pt.finalize(pt._empty_stats()))})
             payload = {
                 "timeframe": timeframe,
                 "source": self.provider.name,
@@ -269,7 +270,7 @@ class MarketService:
                 "unavailable": errors,
                 "patterns": rows,
                 "method": "Each pattern's breakout is entered at the breakout candle's close; success = the book's measured-move "
-                          "target is reached before the pattern's stop. In-sample, before costs and slippage.",
+                          f"target is reached before the pattern's stop. In-sample; P&L {COST_NOTE}.",
             }
             self._pattern_stats[timeframe] = (now_ist(), payload)
             return payload
@@ -380,7 +381,8 @@ class MarketService:
             "snapshot": {k: ta.clean(last.get(k)) for k in SNAPSHOT_FIELDS},
             "last_close": float(df["close"].iloc[-1]),
             "history": self._memoized((inst.instrument_key, timeframe, "history", with_series), stamp,
-                                      lambda: signal_history(df, ind, timeframe, with_markers=with_series)),
+                                      lambda: signal_history(df, ind, timeframe, with_markers=with_series,
+                                                             cost_pct=cost_for(timeframe, inst.kind))),
             "patterns": {"current": pt.current(found)},
             "strategies": self._memoized((inst.instrument_key, timeframe, "strategies", with_series), stamp,
                                          lambda: sx.block(df, ind, strat, with_series)),
@@ -397,7 +399,7 @@ class MarketService:
                                      "message": "Training the combined model on every stock's history — this fills in within a minute."}
             done = [p for p in found if p["status"] in pt.RESOLVED]
             result["patterns"]["recent"] = done[-30:]
-            result["patterns"]["stock_stats"] = pt.merge_stats([pt.raw_stats(found)])
+            result["patterns"]["stock_stats"] = pt.merge_stats([pt.raw_stats(found, cost_for(timeframe, inst.kind))])
         if with_series:
             result["forming_candle"] = forming.model_dump(mode="json") if forming else None
             result["candles"], result["series"], result["oscillators"] = self._memoized(

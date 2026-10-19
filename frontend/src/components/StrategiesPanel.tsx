@@ -198,7 +198,10 @@ function StatsRows({ rows }: { rows: StrategyStatsRow[] }) {
               {r.edge_pts == null ? "—" : `${r.edge_pts > 0 ? "+" : ""}${r.edge_pts} pts`}
             </td>
             <td className="tabular py-1 pr-2 text-right">{r.trade_win_rate == null ? "—" : `${r.trade_win_rate}%`}</td>
-            <td className={`tabular py-1 text-right ${(r.avg_trade_pct ?? 0) < 0 ? "text-bear" : ""}`}>{fmtPct(r.avg_trade_pct)}</td>
+            <td className={`tabular py-1 pr-2 text-right ${(r.avg_trade_pct ?? 0) < 0 ? "text-bear" : ""}`} title={`before costs ${fmtPct(r.gross_avg_trade_pct)}`}>
+              {fmtPct(r.avg_trade_pct)}
+            </td>
+            <td className={`tabular py-1 text-right ${r.profit_factor != null && r.profit_factor < 1 ? "text-bear" : ""}`}>{r.profit_factor ?? "—"}</td>
           </tr>
         );
       })}
@@ -219,7 +222,8 @@ export function StrategyStatsTable({ timeframe }: { timeframe: Timeframe }) {
       <th className="py-1.5 pr-2 text-right font-medium">Random</th>
       <th className="py-1.5 pr-2 text-right font-medium">Edge</th>
       <th className="py-1.5 pr-2 text-right font-medium">Trades won</th>
-      <th className="py-1.5 text-right font-medium">Avg trade</th>
+      <th className="py-1.5 pr-2 text-right font-medium" title="Average trade after estimated Upstox charges and slippage">Avg trade (net)</th>
+      <th className="py-1.5 text-right font-medium" title="Profit factor: total gains ÷ total losses after costs (above 1 makes money)">PF</th>
     </tr>
   );
   return (

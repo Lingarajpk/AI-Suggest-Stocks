@@ -859,6 +859,8 @@ def _dedupe(resolved: list[tuple[Setup, dict]]) -> list[tuple[Setup, dict]]:
             if clash is not None:
                 k, kr = clash
                 acted = kr.get("entry") if kr.get("entry") is not None else kr.get("failed_at")
+                if acted is None and kr.get("status") == "expired_unbroken":
+                    acted = k.known + k.max_wait  # stopped waiting for a breakout here: already final
                 if acted is not None and acted <= s.known:
                     continue  # the older pattern already broke out or failed; this is a re-detection
                 kept.remove(clash)
@@ -949,7 +951,9 @@ def finalize(s: dict) -> dict:
         "expired": s["expired"],
         "success_rate": round(100 * s["wins"] / n, 1) if n else None,
         "profitable_rate": round(100 * sum(p > 0 for p in s["pnl"]) / len(s["pnl"]), 1) if s["pnl"] else None,
-        "avg_pnl_pct": round(sum(s["pnl"]) / len(s["pnl"]), 2) if s["pnl"] else None,
+        "avg_pnl_pct": round(sum(s["pnl"]) / len(s["pnl"]), 2) if s["pnl"] else None,  # net of costs
+        "gross_avg_pnl_pct": round(sum(s["gross"]) / len(s["gross"]), 2) if s.get("gross") else None,
+        "profit_factor": _profit_factor(s["pnl"]),
         "volume_confirmed_n": s["vol_n"],
         "volume_confirmed_success_rate": round(100 * s["vol_wins"] / s["vol_n"], 1) if s["vol_n"] else None,
     }
@@ -960,17 +964,28 @@ def merge_stats(raw: list[dict]) -> dict:
     acc: dict[str, dict] = {}
     for one in raw:
         for k, v in one.items():
-            a = acc.setdefault(k, {"detected": 0, "failed": 0, "wins": 0, "losses": 0, "expired": 0, "pnl": [], "vol_wins": 0, "vol_n": 0})
+            a = acc.setdefault(k, _empty_stats())
             for f in ("detected", "failed", "wins", "losses", "expired", "vol_wins", "vol_n"):
                 a[f] += v[f]
             a["pnl"] += v["pnl"]
+            a["gross"] += v.get("gross", v["pnl"])
     return {k: finalize(v) for k, v in acc.items()}
 
 
-def raw_stats(items: list[dict]) -> dict[str, dict]:
+def _empty_stats() -> dict:
+    return {"detected": 0, "failed": 0, "wins": 0, "losses": 0, "expired": 0, "pnl": [], "gross": [], "vol_wins": 0, "vol_n": 0}
+
+
+def _profit_factor(pnl: list[float]) -> float | None:
+    gain, loss = sum(p for p in pnl if p > 0), -sum(p for p in pnl if p < 0)
+    return round(gain / loss, 2) if loss > 0 else None
+
+
+def raw_stats(items: list[dict], cost_pct: float = 0.0) -> dict[str, dict]:
+    """Per pattern: outcomes and trade results, net of one round trip of `cost_pct` (charges + slippage, %)."""
     stats: dict[str, dict] = {}
     for it in items:
-        s = stats.setdefault(it["key"], {"detected": 0, "failed": 0, "wins": 0, "losses": 0, "expired": 0, "pnl": [], "vol_wins": 0, "vol_n": 0})
+        s = stats.setdefault(it["key"], _empty_stats())
         s["detected"] += 1
         st = it["status"]
         if st in ("failed", "expired_unbroken"):
@@ -979,7 +994,8 @@ def raw_stats(items: list[dict]) -> dict[str, dict]:
             s["wins"] += st == "target_hit"
             s["losses"] += st == "stopped"
             s["expired"] += st == "expired"
-            s["pnl"].append(it["pnl_pct"])
+            s["pnl"].append(round(it["pnl_pct"] - cost_pct, 2))
+            s["gross"].append(it["pnl_pct"])
             if it.get("volume_confirmed"):
                 s["vol_n"] += 1
                 s["vol_wins"] += st == "target_hit"

@@ -104,3 +104,19 @@ def test_stats_aggregate():
         if v["resolved"]:
             assert 0 <= v["success_rate"] <= 100
         assert k in pt.CATALOG
+
+
+def test_dedupe_keeps_a_pattern_that_already_expired():
+    """An older shape that expired unbroken before a newer overlapping one was known stays in history
+    (it was final live) and the overlapping re-detection is dropped; one still waiting for its breakout
+    is replaced by the bigger shape."""
+    def setup(start, end, known, wait=10):
+        return pt.Setup("triple_top", start, end, known, [], (0, 1.0, 1, 1.0), None, {}, {}, {}, wait, 20)
+
+    old, newer = setup(0, 20, 22), setup(10, 40, 45)
+    expired = {"status": "expired_unbroken"}  # stopped waiting at 22 + 10 = 32 < 45
+    kept = pt._dedupe([(old, expired), (newer, {"status": "forming"})])
+    assert [s.known for s, _ in kept] == [22]
+    still_waiting = setup(0, 20, 40, wait=10)  # would wait until 50 > 45: replaced
+    kept = pt._dedupe([(still_waiting, {"status": "forming"}), (newer, {"status": "forming"})])
+    assert [s.known for s, _ in kept] == [45]

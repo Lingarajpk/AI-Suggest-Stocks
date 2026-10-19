@@ -146,7 +146,10 @@ export interface StrategyStatsRow {
   avg_move_pct: number | null;
   trades: number;
   trade_win_rate: number | null;
+  /** Net of estimated charges and slippage. */
   avg_trade_pct: number | null;
+  gross_avg_trade_pct: number | null;
+  profit_factor: number | null;
 }
 
 export interface StrategyStatsResult {
@@ -208,7 +211,10 @@ export interface PatternStats {
   expired: number;
   success_rate: number | null;
   profitable_rate: number | null;
+  /** Net of estimated charges and slippage. */
   avg_pnl_pct: number | null;
+  gross_avg_pnl_pct: number | null;
+  profit_factor: number | null;
   volume_confirmed_n: number;
   volume_confirmed_success_rate: number | null;
 }
@@ -511,7 +517,7 @@ export interface SignalHistory {
   period_end: string;
   notes: string;
   markers?: SignalMarker[];
-  trades?: { buy: TradeStats; sell: TradeStats; rules: string };
+  trades?: { buy: TradeStats; sell: TradeStats; rules: string; cost_pct?: number };
   open_trade?: OpenTrade | null;
   latest_exit?: ClosedTrade | null;
   exits?: ClosedTrade[];
@@ -520,9 +526,21 @@ export interface SignalHistory {
 export interface TradeStats {
   count: number;
   wins: number;
+  /** Share of trades profitable after costs. */
   win_rate: number | null;
+  /** Expectancy per trade, net of estimated charges and slippage. */
   avg_pnl_pct: number | null;
   total_pnl_pct: number | null;
+  gross_avg_pnl_pct: number | null;
+  cost_pct: number | null;
+  avg_win_pct: number | null;
+  avg_loss_pct: number | null;
+  profit_factor: number | null;
+  max_drawdown_pct: number | null;
+  sharpe: number | null;
+  sqn: number | null;
+  /** [exit time, compounded equity % from the start] after each trade. */
+  equity: [string, number][];
 }
 
 interface TradeBase {
