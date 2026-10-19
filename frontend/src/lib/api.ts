@@ -68,9 +68,13 @@ export function useScanner(timeframe: Timeframe) {
 
 type CompactSeries = Record<string, (number | null)[]>;
 
+/** Stocks and indices live under /api, currency pairs under /api/forex. */
+export type Market = "stocks" | "forex";
+const apiBase = (m: Market) => (m === "forex" ? "/api/forex" : "/api");
+
 /** The API sends each series as an array aligned to the candles (much smaller than {time, value}
  * objects); rebuild the points the charts use. Supertrend points also carry their direction. */
-function expandSeries(candles: CandleData[], compact: CompactSeries | undefined): Record<string, Point[]> {
+export function expandSeries(candles: CandleData[], compact: CompactSeries | undefined): Record<string, Point[]> {
   const out: Record<string, Point[]> = {};
   const dirs = compact?.supertrend_dir;
   for (const [name, values] of Object.entries(compact ?? {})) {
@@ -86,7 +90,7 @@ function expandSeries(candles: CandleData[], compact: CompactSeries | undefined)
   return out;
 }
 
-async function fetchStock(url: string): Promise<StockDetail> {
+export async function fetchStock(url: string): Promise<StockDetail> {
   const d = await fetcher<StockDetail & { series: CompactSeries; oscillators: CompactSeries }>(url);
   const first = d.candles[0]?.time ?? "";
   const h = d.history;
@@ -114,16 +118,16 @@ const IST_MS = 5.5 * 3600_000;
 const OPEN_MS = (9 * 60 + 15) * 60_000; // bars are aligned to the 09:15 IST open
 
 /** Milliseconds until `delay` after the current intraday bar closes (so the new candle is picked up at once). */
-export function msToNextBar(timeframe: Timeframe, delay = 5_000, now = Date.now()): number | null {
+export function msToNextBar(timeframe: Timeframe, delay = 5_000, now = Date.now(), openMs = OPEN_MS): number | null {
   const bar = BAR_MS[timeframe];
   if (!bar) return null;
-  const sinceOpen = (((now + IST_MS) % 86_400_000) - OPEN_MS + 86_400_000) % 86_400_000;
+  const sinceOpen = (((now + IST_MS) % 86_400_000) - openMs + 86_400_000) % 86_400_000;
   return bar - (sinceOpen % bar) + delay;
 }
 
 /** Poll every `normal` ms, but also right after each candle closes. */
-function barAware(timeframe: Timeframe, normal: number, delay?: number): number {
-  const next = msToNextBar(timeframe, delay);
+export function barAware(timeframe: Timeframe, normal: number, delay?: number, openMs?: number): number {
+  const next = msToNextBar(timeframe, delay, Date.now(), openMs);
   return next == null ? normal : Math.min(normal, next);
 }
 
@@ -161,30 +165,30 @@ export function useIntraday() {
 }
 
 /** Index option chain with an OI summary and which option to buy (NIFTY 50, BANK NIFTY, SENSEX only). */
-export function useOptionChain(symbol: string | null, expiry: string | null) {
-  const key = symbol ? `/api/options/${encodeURIComponent(symbol)}${expiry ? `?expiry=${expiry}` : ""}` : null;
+export function useOptionChain(symbol: string | null, expiry: string | null, market: Market = "stocks") {
+  const key = symbol ? `${apiBase(market)}/options/${encodeURIComponent(symbol)}${expiry ? `?expiry=${expiry}` : ""}` : null;
   return useSWR<OptionChain, ApiError>(key, fetcher, { refreshInterval: 15_000, keepPreviousData: true });
 }
 
 /** Per-pattern success rates measured across the whole universe (the pattern "training"). */
-export function usePatternStats(timeframe: Timeframe) {
-  return useSWR<PatternStatsResult, ApiError>(`/api/patterns/stats?timeframe=${timeframe}`, fetcher, {
+export function usePatternStats(timeframe: Timeframe, market: Market = "stocks") {
+  return useSWR<PatternStatsResult, ApiError>(`${apiBase(market)}/patterns/stats?timeframe=${timeframe}`, fetcher, {
     refreshInterval: 30 * 60_000,
     keepPreviousData: true,
   });
 }
 
 /** Each strategy's and candlestick's hit rate vs. random, pooled across the universe. */
-export function useStrategyStats(timeframe: Timeframe) {
-  return useSWR<StrategyStatsResult, ApiError>(`/api/strategies/stats?timeframe=${timeframe}`, fetcher, {
+export function useStrategyStats(timeframe: Timeframe, market: Market = "stocks") {
+  return useSWR<StrategyStatsResult, ApiError>(`${apiBase(market)}/strategies/stats?timeframe=${timeframe}`, fetcher, {
     refreshInterval: 30 * 60_000,
     keepPreviousData: true,
   });
 }
 
 /** Live headlines for one stock + news-adjusted probability (backend polls the feed every few minutes). */
-export function useStockNews(symbol: string) {
-  return useSWR<StockNews, ApiError>(`/api/news/${encodeURIComponent(symbol)}`, fetcher, { refreshInterval: 60_000, keepPreviousData: true });
+export function useStockNews(symbol: string, market: Market = "stocks") {
+  return useSWR<StockNews, ApiError>(`${apiBase(market)}/news/${encodeURIComponent(symbol)}`, fetcher, { refreshInterval: 60_000, keepPreviousData: true });
 }
 
 export function useNewsFeed(limit = 20) {

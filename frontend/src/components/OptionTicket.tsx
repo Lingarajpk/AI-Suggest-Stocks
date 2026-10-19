@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Copy, Minus, Plus, X } from "lucide-react";
 import { roundTrip } from "@/lib/charges";
-import { fmtDate, fmtPrice } from "@/lib/format";
+import { fmtDate, fmtPx } from "@/lib/format";
 import type { OptionChain, OptionLeg } from "@/lib/types";
 import { loadPrefs } from "./TradeCalculator";
 
@@ -14,13 +14,15 @@ export interface TicketContract {
 }
 
 const TICK = 0.05;
-const tick = (v: number) => Math.round(Math.round(v / TICK) * TICK * 100) / 100;
+/** Round to the premium step: 0.05 for equity/index options, 0.0025 for currency options. */
+const tick = (v: number, step = TICK) => Math.round(Math.round(v / step) * step * 10_000) / 10_000;
 const inr = (v: number) => `₹${Math.abs(Math.round(v)).toLocaleString("en-IN")}`;
 
 /** Suggested premium stop and target for any contract: the pick's own levels, else the index move through delta and gamma. */
 export function suggestLevels(data: OptionChain, c: TicketContract): { entry: number; stop: number; target: number } {
+  const step = data.tick ?? TICK;
   const cand = data.recommendation.candidates[c.kind];
-  const entry = tick(c.leg.ask && c.leg.ask > 0 ? c.leg.ask : (c.leg.ltp ?? 0));
+  const entry = tick(c.leg.ask && c.leg.ask > 0 ? c.leg.ask : (c.leg.ltp ?? 0), step);
   if (cand && cand.strike === c.strike) return { entry: cand.entry, stop: cand.stop, target: cand.target };
   const spot = data.spot ?? 0;
   const moveT = cand ? Math.abs(cand.underlying_target - spot) : spot * 0.005;
@@ -29,13 +31,13 @@ export function suggestLevels(data: OptionChain, c: TicketContract): { entry: nu
   const g = c.leg.gamma ?? 0;
   return {
     entry,
-    target: tick(entry + d * moveT + 0.5 * g * moveT * moveT),
-    stop: tick(Math.max(TICK, entry - d * moveS + 0.5 * g * moveS * moveS)),
+    target: tick(entry + d * moveT + 0.5 * g * moveT * moveT, step),
+    stop: tick(Math.max(step, entry - d * moveS + 0.5 * g * moveS * moveS), step),
   };
 }
 
-function Field({ label, value, onChange, onClear, hint, disabled }: {
-  label: React.ReactNode; value: number | null; onChange: (v: number | null) => void; onClear?: () => void; hint?: string; disabled?: boolean;
+function Field({ label, value, onChange, onClear, hint, disabled, step = "0.05" }: {
+  label: React.ReactNode; value: number | null; onChange: (v: number | null) => void; onClear?: () => void; hint?: string; disabled?: boolean; step?: string;
 }) {
   return (
     <div className="flex items-start justify-between gap-3">
@@ -53,7 +55,7 @@ function Field({ label, value, onChange, onClear, hint, disabled }: {
         <input
           type="number"
           inputMode="decimal"
-          step="0.05"
+          step={step}
           disabled={disabled}
           value={value ?? ""}
           onChange={(e) => onChange(e.target.value === "" ? null : parseFloat(e.target.value))}
@@ -69,6 +71,10 @@ function Field({ label, value, onChange, onClear, hint, disabled }: {
 export function OptionTicket({ data, contract, onClose }: { data: OptionChain; contract: TicketContract; onClose: () => void }) {
   const lot = data.lot_size ?? 1;
   const ltp = contract.leg.ltp ?? 0;
+  const step = data.tick ?? TICK;
+  const dp = step < 0.01 ? 4 : 2;
+  const fmtPrice = (v: number | null | undefined) => fmtPx(v, dp);
+  const product = data.instrument?.kind === "currency" ? "currency_option" : "option";
   const suggested = useMemo(() => suggestLevels(data, contract), [data, contract]);
   const [lots, setLots] = useState(1);
   const [market, setMarket] = useState(false);
@@ -76,7 +82,7 @@ export function OptionTicket({ data, contract, onClose }: { data: OptionChain; c
   const [stop, setStop] = useState<number | null>(suggested.stop);
   const [target, setTarget] = useState<number | null>(suggested.target);
   const [trail, setTrail] = useState(false);
-  const [trailBy, setTrailBy] = useState<number | null>(tick(Math.max(TICK, suggested.entry * 0.1)));
+  const [trailBy, setTrailBy] = useState<number | null>(tick(Math.max(step, suggested.entry * 0.1), step));
   const [copied, setCopied] = useState(false);
   const [balance, setBalance] = useState(0);
 
@@ -92,12 +98,12 @@ export function OptionTicket({ data, contract, onClose }: { data: OptionChain; c
   const buy = market ? ltp : (price ?? 0);
   const fromMarket = ltp > 0 && !market && price ? ((price - ltp) / ltp) * 100 : null;
   const result = (exit: number) => {
-    const c = roundTrip("option", qty, buy, exit);
+    const c = roundTrip(product, qty, buy, exit);
     return { gross: (exit - buy) * qty, charges: c.total, net: (exit - buy) * qty - c.total };
   };
   const atTarget = target != null && target > 0 ? result(target) : null;
   const atStop = stop != null && stop > 0 ? result(stop) : null;
-  const buyCharges = roundTrip("option", qty, buy, 0).total;
+  const buyCharges = roundTrip(product, qty, buy, 0).total;
   const required = buy * qty + buyCharges;
   const bad = (stop != null && stop >= buy) || (target != null && target <= buy);
   const rr = atTarget && atStop && atStop.net < 0 ? atTarget.net / -atStop.net : null;
@@ -169,11 +175,12 @@ export function OptionTicket({ data, contract, onClose }: { data: OptionChain; c
             value={market ? ltp : price}
             onChange={setPrice}
             disabled={market}
+            step={String(step)}
             hint={fromMarket != null ? `${fromMarket >= 0 ? "+" : ""}${fromMarket.toFixed(2)}% from market` : market ? "at the market price" : undefined}
           />
 
           <div>
-            <Field label="Stoploss (SL)" value={stop} onChange={setStop} onClear={() => setStop(null)} hint={`suggested ₹${fmtPrice(suggested.stop)}`} />
+            <Field label="Stoploss (SL)" value={stop} onChange={setStop} onClear={() => setStop(null)} hint={`suggested ₹${fmtPrice(suggested.stop)}`} step={String(step)} />
             <label className="mt-1 flex items-center gap-2 text-sm text-muted">
               <input type="checkbox" checked={trail} onChange={(e) => setTrail(e.target.checked)} className="accent-accent" /> Trail
               {trail && (
@@ -181,7 +188,7 @@ export function OptionTicket({ data, contract, onClose }: { data: OptionChain; c
                   by ₹
                   <input
                     type="number"
-                    step="0.05"
+                    step={step}
                     value={trailBy ?? ""}
                     onChange={(e) => setTrailBy(e.target.value === "" ? null : parseFloat(e.target.value))}
                     className="tabular w-20 rounded-md border border-line bg-panel-2 px-2 py-1 text-ink outline-none focus:border-accent"
@@ -192,7 +199,7 @@ export function OptionTicket({ data, contract, onClose }: { data: OptionChain; c
             </label>
           </div>
 
-          <Field label="Target (TGT)" value={target} onChange={setTarget} onClear={() => setTarget(null)} hint={`suggested ₹${fmtPrice(suggested.target)}`} />
+          <Field label="Target (TGT)" value={target} onChange={setTarget} onClear={() => setTarget(null)} hint={`suggested ₹${fmtPrice(suggested.target)}`} step={String(step)} />
 
           {bad && <p className="rounded-lg bg-warn/10 px-3 py-2 text-xs text-warn">For a buy, the stop-loss must be below the price and the target above it.</p>}
           {!bad && balance > 0 && required > balance && (

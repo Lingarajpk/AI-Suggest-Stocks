@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { Shapes } from "lucide-react";
-import { TIMEFRAME_LABEL, usePatternStats } from "@/lib/api";
-import { fmtDate, fmtPct, fmtPrice } from "@/lib/format";
+import { TIMEFRAME_LABEL, usePatternStats, type Market } from "@/lib/api";
+import { fmtDate, fmtPct } from "@/lib/format";
+import { usePx } from "@/lib/priceDigits";
 import type { PatternBlock, PatternInstance, PatternStats, PatternStatsRow, Quote, ScanRow, Timeframe } from "@/lib/types";
 import { Panel } from "./ui";
 
@@ -36,6 +37,7 @@ function Measured({ s, label }: { s: PatternStats | undefined; label: string }) 
 }
 
 function CurrentPattern({ p, quote, pooled, local }: { p: PatternInstance; quote: Quote | null; pooled?: PatternStats; local?: PatternStats }) {
+  const fmtPrice = usePx();
   const live = quote?.last_price;
   const broke = p.status !== "forming";
   const up = p.direction === "up";
@@ -120,13 +122,15 @@ export function PatternsPanel({
   timeframe,
   quote,
   source,
+  market = "stocks",
 }: {
   block: PatternBlock | undefined;
   timeframe: Timeframe;
   quote: Quote | null;
   source: "upstox" | "demo";
+  market?: Market;
 }) {
-  const stats = usePatternStats(timeframe);
+  const stats = usePatternStats(timeframe, market);
   const pooled = Object.fromEntries((stats.data?.patterns ?? []).map((r) => [r.key, r]));
   const current = block?.current ?? [];
   const recent = [...(block?.recent ?? [])].reverse().slice(0, 8);
@@ -182,8 +186,8 @@ export function PatternsPanel({
   );
 }
 
-export function PatternStatsTable({ timeframe }: { timeframe: Timeframe }) {
-  const { data, error, isLoading } = usePatternStats(timeframe);
+export function PatternStatsTable({ timeframe, market = "stocks" }: { timeframe: Timeframe; market?: Market }) {
+  const { data, error, isLoading } = usePatternStats(timeframe, market);
   const rows: PatternStatsRow[] = [...(data?.patterns ?? [])].sort((a, b) => b.resolved - a.resolved || b.stars - a.stars);
   return (
     <Panel

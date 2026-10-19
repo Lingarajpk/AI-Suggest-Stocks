@@ -231,7 +231,8 @@ def trade_stats(trades: list[dict]) -> dict:
     }
 
 
-def signal_history(df: pd.DataFrame, ind: pd.DataFrame, timeframe: Timeframe, with_markers: bool, cost_pct: float = 0.0) -> dict:
+def signal_history(df: pd.DataFrame, ind: pd.DataFrame, timeframe: Timeframe, with_markers: bool, cost_pct: float = 0.0,
+                   cost_note: str = COST_NOTE) -> dict:
     score = score_series(df, ind)
     valid = pd.Series(np.arange(len(df)) >= MIN_BARS, index=df.index) & score.notna()
     prev = score.shift()
@@ -263,7 +264,7 @@ def signal_history(df: pd.DataFrame, ind: pd.DataFrame, timeframe: Timeframe, wi
         "base_rate_up_pct": round(100 * float((base > 0).mean()), 1) if len(base) else None,
         "period_start": df.index[MIN_BARS].isoformat() if len(df) > MIN_BARS else None,
         "period_end": df.index[-1].isoformat(),
-        "notes": f"In-sample. Hit rates are direction only (before costs); trades are {COST_NOTE}. "
+        "notes": f"In-sample. Hit rates are direction only (before costs); trades are {cost_note}. "
                  "Past results do not guarantee future results.",
     }
     events = df.index[buy | sell]
@@ -278,7 +279,7 @@ def signal_history(df: pd.DataFrame, ind: pd.DataFrame, timeframe: Timeframe, wi
         "buy": trade_stats([t for t in trades if t["side"] == "buy"]),
         "sell": trade_stats([t for t in trades if t["side"] == "sell"]),
         "rules": "Entry at the signal candle close; exit on stop (1.5 ATR), target (2.5 ATR), trend reversal "
-                 f"(close through EMA20 with MACD flipped) or opposite signal. Results {COST_NOTE}.",
+                 f"(close through EMA20 with MACD flipped) or opposite signal. Results {cost_note}.",
         "cost_pct": round(cost_pct, 3),
     }
     result["open_trade"] = open_trade

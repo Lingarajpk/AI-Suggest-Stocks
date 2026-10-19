@@ -66,7 +66,7 @@ const DEFAULT_LAYERS: Record<LayerKey, boolean> = {
 };
 const LAYER_KEY = "ai-stock:layers";
 
-function useLayers() {
+export function useLayers() {
   const [layers, setLayers] = useState(DEFAULT_LAYERS);
   useEffect(() => {
     try {
@@ -90,7 +90,7 @@ function useLayers() {
   return { layers, toggle };
 }
 
-function LayersMenu({ layers, toggle, intraday }: { layers: Record<LayerKey, boolean>; toggle: (k: LayerKey) => void; intraday: boolean }) {
+export function LayersMenu({ layers, toggle, intraday }: { layers: Record<LayerKey, boolean>; toggle: (k: LayerKey) => void; intraday: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -163,7 +163,7 @@ function calculatorSetup(data: StockDetail, price: number | null): TradeSetup | 
 }
 
 /** Capital and risk % from the calculator, kept in sync when the calculator changes them. */
-function useCalcPrefs() {
+export function useCalcPrefs() {
   const [prefs, setPrefs] = useState({ capital: 100000, riskPct: 1 });
   useEffect(() => {
     const read = () => setPrefs(loadPrefs());

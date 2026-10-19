@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ExternalLink, Newspaper } from "lucide-react";
-import { useNewsFeed, useStockNews } from "@/lib/api";
+import { useNewsFeed, useStockNews, type Market } from "@/lib/api";
 import { fmtTime } from "@/lib/format";
 import type { NewsItem } from "@/lib/types";
 import { Panel } from "./ui";
@@ -43,8 +43,8 @@ function Headline({ it, showSymbol }: { it: NewsItem; showSymbol?: boolean }) {
 const VERDICT_CLS = { BUY: "text-bull border-bull/40 bg-bull/10", SELL: "text-bear border-bear/40 bg-bear/10", HOLD: "text-warn border-warn/40 bg-warn/10" };
 
 /** Stock page sidebar: live headlines and the probability after the news. Separate from the pattern/technical UI. */
-export function NewsSidebar({ symbol }: { symbol: string }) {
-  const { data, error } = useStockNews(symbol);
+export function NewsSidebar({ symbol, market = "stocks" }: { symbol: string; market?: Market }) {
+  const { data, error } = useStockNews(symbol, market);
   const adj = data?.adjusted;
   const tech = data?.technical;
   return (

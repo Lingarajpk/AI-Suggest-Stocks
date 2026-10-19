@@ -15,7 +15,7 @@ from app.analysis.history import HORIZON
 from app.analysis.history import signal_history
 from app.analysis.signals import evaluate
 from app.config import Settings
-from app.market_session import is_session_open, now_ist, session_state
+from app.market_session import EQUITY, MarketHours, is_session_open, now_ist, session_state
 from app.models import Instrument, Quote, Timeframe, is_intraday
 from app.providers.base import MarketDataProvider, ProviderError, drop_incomplete, live_bar_start
 from app.watchlists import SYMBOL_RE
@@ -62,6 +62,11 @@ SNAPSHOT_FIELDS = (
 
 
 class MarketService:
+    # Session the instruments trade in, and decimals for prices in plain-text instructions.
+    hours: MarketHours = EQUITY
+    price_dp = 2
+    cost_note = COST_NOTE
+
     def __init__(self, provider: MarketDataProvider, settings: Settings) -> None:
         self.provider = provider
         self.settings = settings
@@ -240,7 +245,7 @@ class MarketService:
                 "method": f"Hit rate = share of signals where price moved the signalled way over the next {h_label}, versus "
                           "the base rate (how often it moved that way on any candle). Trades use the main signal's rules: "
                           "entry at the signal close, stop 1.5 ATR, target 2.5 ATR, or exit on a trend reversal. "
-                          f"Pooled over the universe, in-sample. Hit rates are direction only; trade results are {COST_NOTE}.",
+                          f"Pooled over the universe, in-sample. Hit rates are direction only; trade results are {self.cost_note}.",
             }
             self._strategy_stats[timeframe] = (now_ist(), payload)
             return payload
@@ -270,7 +275,7 @@ class MarketService:
                 "unavailable": errors,
                 "patterns": rows,
                 "method": "Each pattern's breakout is entered at the breakout candle's close; success = the book's measured-move "
-                          f"target is reached before the pattern's stop. In-sample; P&L {COST_NOTE}.",
+                          f"target is reached before the pattern's stop. In-sample; P&L {self.cost_note}.",
             }
             self._pattern_stats[timeframe] = (now_ist(), payload)
             return payload
@@ -288,7 +293,7 @@ class MarketService:
         out, errors = [], []
         for inst in instruments:
             try:
-                candles = drop_incomplete(await self.provider.candles(inst, timeframe, include_partial=True), timeframe, now_ist())
+                candles = drop_incomplete(await self.provider.candles(inst, timeframe, include_partial=True), timeframe, now_ist(), self.hours)
             except ProviderError as exc:
                 if exc.http_status == 401:
                     raise
@@ -341,7 +346,7 @@ class MarketService:
 
     async def technical_outlook(self, inst: Instrument, timeframe: Timeframe) -> dict:
         """Combined technical outlook for one stock (used by the news sidebar), cached per candle."""
-        candles = drop_incomplete(await self.provider.candles(inst, timeframe, include_partial=True), timeframe, now_ist())
+        candles = drop_incomplete(await self.provider.candles(inst, timeframe, include_partial=True), timeframe, now_ist(), self.hours)
         df, ind, _ = self._frame(inst, timeframe, candles)
         if df.empty:
             return {"status": "not_available", "message": "No candle data."}
@@ -364,7 +369,7 @@ class MarketService:
     async def analyse(self, inst: Instrument, timeframe: Timeframe, with_series: bool) -> dict:
         all_candles = await self.provider.candles(inst, timeframe, include_partial=True)
         # Signals use completed candles only; the forming one is returned separately for live charts.
-        candles = drop_incomplete(all_candles, timeframe, now_ist())
+        candles = drop_incomplete(all_candles, timeframe, now_ist(), self.hours)
         forming = all_candles[-1] if len(all_candles) > len(candles) else None
         df, ind, stamp = self._frame(inst, timeframe, candles)
         quote = self.cached_quote(inst.instrument_key)
@@ -382,7 +387,8 @@ class MarketService:
             "last_close": float(df["close"].iloc[-1]),
             "history": self._memoized((inst.instrument_key, timeframe, "history", with_series), stamp,
                                       lambda: signal_history(df, ind, timeframe, with_markers=with_series,
-                                                             cost_pct=cost_for(timeframe, inst.kind))),
+                                                             cost_pct=cost_for(timeframe, inst.kind),
+                                                             cost_note=self.cost_note)),
             "patterns": {"current": pt.current(found)},
             "strategies": self._memoized((inst.instrument_key, timeframe, "strategies", with_series), stamp,
                                          lambda: sx.block(df, ind, strat, with_series)),
@@ -522,8 +528,8 @@ class MarketService:
                 levels = {"entry_low": sc["entry_low"], "entry_high": sc["entry_high"], "target": sc["target"],
                           "stop": sc["stop_loss"], "risk_reward": sc["risk_reward"], "basis": sc["basis"]}
             else:
-                levels = {"entry_low": round(price - 0.2 * atr, 2), "entry_high": round(price + 0.2 * atr, 2),
-                          "target": round(price + d * 2.5 * atr, 2), "stop": round(price - d * 1.5 * atr, 2),
+                levels = {"entry_low": round(price - 0.2 * atr, 4), "entry_high": round(price + 0.2 * atr, 4),
+                          "target": round(price + d * 2.5 * atr, 4), "stop": round(price - d * 1.5 * atr, 4),
                           "risk_reward": round(2.5 / 1.5, 2), "basis": "ATR(14) on 5-minute candles: stop 1.5 ATR, target 2.5 ATR"}
         states = (a5.get("strategies") or {}).get("strategies") or []
         test5 = (o5 or {}).get("test") or {}
@@ -587,7 +593,7 @@ class MarketService:
             else:
                 reason = None
             if reason:
-                pos = {**pos, "status": reason, "exit_price": round(price, 2), "closed": candle,
+                pos = {**pos, "status": reason, "exit_price": round(price, 4), "closed": candle,
                        "pnl_pct": round((price / pos["entry"] - 1) * 100 * (1 if long else -1), 2)}
         # 2. After an exit, a new call on the same side needs the signal to reset first.
         if pos and pos["status"] != "open" and verdict != pos["side"]:
@@ -596,7 +602,7 @@ class MarketService:
         if verdict in ("BUY", "SELL") and levels and price and (
                 pos is None or (pos["status"] != "open" and (pos["side"] != verdict or pos.get("rearmed")))):
             prev = None if pos is None else {k: v for k, v in pos.items() if k != "previous"}
-            pos = {"side": verdict, "entry": round(price, 2), "target": levels["target"], "stop": levels["stop"],
+            pos = {"side": verdict, "entry": round(price, 4), "target": levels["target"], "stop": levels["stop"],
                    "opened": candle or now_ist().isoformat(), "status": "open", "exit_price": None, "closed": None,
                    "pnl_pct": None, "previous": prev}
         if pos is None:
@@ -605,20 +611,20 @@ class MarketService:
             self._positions[symbol] = pos
         return pos
 
-    @staticmethod
-    def _action(verdict: str, pos: dict | None) -> dict:
+    def _action(self, verdict: str, pos: dict | None) -> dict:
         """One plain instruction: BUY / SELL / HOLD the open call / SELL NOW to exit / WAIT."""
+        f = lambda v: f"{v:,.{self.price_dp}f}"  # noqa: E731
         if pos and pos["status"] == "open":
             if pos["side"] == "BUY":
-                return {"label": "HOLD BUY", "tone": "bull", "text": f"Bought at {pos['entry']:,.2f}: sell at target "
-                        f"{pos['target']:,.2f}, or at the stop {pos['stop']:,.2f}."}
-            return {"label": "HOLD SELL", "tone": "bear", "text": f"Sold at {pos['entry']:,.2f}: buy back at target "
-                    f"{pos['target']:,.2f}, or at the stop {pos['stop']:,.2f}."}
+                return {"label": "HOLD BUY", "tone": "bull", "text": f"Bought at {f(pos['entry'])}: sell at target "
+                        f"{f(pos['target'])}, or at the stop {f(pos['stop'])}."}
+            return {"label": "HOLD SELL", "tone": "bear", "text": f"Sold at {f(pos['entry'])}: buy back at target "
+                    f"{f(pos['target'])}, or at the stop {f(pos['stop'])}."}
         if pos and pos["status"] in ("target", "stop", "signal_ended"):
             what = {"target": "target reached", "stop": "stop-loss hit", "signal_ended": "the signal ended"}[pos["status"]]
             word = "SELL NOW" if pos["side"] == "BUY" else "BUY BACK NOW"
-            return {"label": word, "tone": "warn", "text": f"Exit the {pos['side']} from {pos['entry']:,.2f}: {what} at "
-                    f"{pos['exit_price']:,.2f} ({pos['pnl_pct']:+.2f}% before costs)."}
+            return {"label": word, "tone": "warn", "text": f"Exit the {pos['side']} from {f(pos['entry'])}: {what} at "
+                    f"{f(pos['exit_price'])} ({pos['pnl_pct']:+.2f}% before costs)."}
         if verdict == "BUY":
             return {"label": "BUY", "tone": "bull", "text": "Both timeframes point up."}
         if verdict == "SELL":
@@ -642,13 +648,12 @@ class MarketService:
                 return {"symbol": sym, "instrument": inst.model_dump(), "error": exc.message}
 
         rows = await asyncio.gather(*(one(s) for s in symbols))
-        return {"generated_at": now_ist().isoformat(), "source": self.provider.name, "session": session_state(), "rows": rows}
+        return {"generated_at": now_ist().isoformat(), "source": self.provider.name, "session": session_state(hours=self.hours), "rows": rows}
 
     # ---- intraday desk cache --------------------------------------------------
-    @staticmethod
-    def _entry_bar() -> str:
+    def _entry_bar(self) -> str:
         now = now_ist()
-        return live_bar_start(now, 5).isoformat() if is_session_open(now) else now.date().isoformat()
+        return live_bar_start(now, 5, self.hours).isoformat() if is_session_open(now, self.hours) else now.date().isoformat()
 
     def _desk_stale(self, hit: tuple[float, str, dict]) -> bool:
         return time.monotonic() - hit[0] > DESK_FRESH_SECONDS or hit[1] != self._entry_bar()
@@ -699,13 +704,13 @@ class MarketService:
         so the first visitor after a new candle doesn't wait for the calculation."""
         while True:
             now = now_ist()
-            if is_session_open(now):
+            if is_session_open(now, self.hours):
                 try:
                     await self.intraday(include_stocks=True, fresh=True)
                 except Exception as exc:
                     log.info("desk warm-up skipped: %s", exc)
                 now = now_ist()
-                nxt = live_bar_start(now, 5) + timedelta(minutes=5, seconds=4)
+                nxt = live_bar_start(now, 5, self.hours) + timedelta(minutes=5, seconds=4)
                 await asyncio.sleep(max(5.0, (nxt - now).total_seconds()))
             else:
                 await asyncio.sleep(60)
@@ -724,7 +729,7 @@ class MarketService:
         out = {
             "generated_at": now_ist().isoformat(),
             "source": self.provider.name,
-            "session": session_state(),
+            "session": session_state(hours=self.hours),
             "entry_timeframe": ENTRY_TF,
             "trend_timeframe": TREND_TF,
             "indices": cards,

@@ -10,9 +10,12 @@ from typing import Literal
 
 from app.models import Timeframe, is_intraday
 
-Product = Literal["intraday", "delivery", "futures"]
+Product = Literal["intraday", "delivery", "futures", "currency"]
 
 NOTIONAL = 100_000.0  # rupees per backtested trade
+# Currency futures: one lot is only ~Rs 1 lakh and moves little, so the flat brokerage is costed on
+# ~10 lots, the smallest size where a forex day trade can sensibly cover its charges.
+NOTIONAL_BY_PRODUCT = {"currency": 1_000_000.0}
 
 RATES: dict[str, dict[str, float]] = {
     # brokerage: pct of order value, capped at Rs 20 per order
@@ -23,17 +26,24 @@ RATES: dict[str, dict[str, float]] = {
     # Index trades go through F&O: futures rates (NSE futures transaction charge, STT 0.02% on the sell side).
     "futures": {"brokerage_pct": 1.0, "brokerage_cap": 20, "stt_sell_pct": 0.0002, "stt_buy_pct": 0.0,
                 "stamp_buy_pct": 0.00002, "exchange_pct": 0.0000173, "dp": 0.0},
+    # NSE currency futures: Rs 20 or 0.05% per order, no STT, NSE currency transaction charge 0.00035%.
+    "currency": {"brokerage_pct": 0.0005, "brokerage_cap": 20, "stt_sell_pct": 0.0, "stt_buy_pct": 0.0,
+                 "stamp_buy_pct": 0.000001, "exchange_pct": 0.0000035, "dp": 0.0},
 }
 SEBI_PCT = 0.000001  # Rs 10 per crore
 GST_PCT = 0.18  # on brokerage + exchange + SEBI (+ DP)
 # Price slippage per side (entry and exit each), as a fraction of the price.
-SLIPPAGE_PER_SIDE = {"intraday": 0.0003, "delivery": 0.0005, "futures": 0.0001}
+SLIPPAGE_PER_SIDE = {"intraday": 0.0003, "delivery": 0.0005, "futures": 0.0001,
+                     "currency": 0.000026}  # about one 0.0025 tick on USDINR
 
 
 def product_for(timeframe: Timeframe, kind: str = "equity") -> Product:
-    """How the backtested trade would be placed: index -> futures, equity -> intraday or delivery."""
+    """How the backtested trade would be placed: index -> futures, currency pair -> currency futures,
+    equity -> intraday or delivery."""
     if kind == "index":
         return "futures"
+    if kind == "currency":
+        return "currency"
     return "intraday" if is_intraday(timeframe) else "delivery"
 
 
@@ -51,8 +61,9 @@ def charges(product: Product, buy_value: float, sell_value: float) -> float:
     return brokerage + stt + exchange + sebi + stamp + r["dp"] + gst
 
 
-def round_trip_pct(product: Product, notional: float = NOTIONAL) -> float:
+def round_trip_pct(product: Product, notional: float | None = None) -> float:
     """Charges plus slippage for one round trip, in % of the position (e.g. 0.14 = 0.14%)."""
+    notional = notional or NOTIONAL_BY_PRODUCT.get(product, NOTIONAL)
     fees = charges(product, notional, notional) / notional
     return round(100 * (fees + 2 * SLIPPAGE_PER_SIDE[product]), 4)
 
@@ -62,3 +73,4 @@ def cost_for(timeframe: Timeframe, kind: str = "equity") -> float:
 
 
 COST_NOTE = "after estimated Upstox charges and slippage (₹1 lakh per trade)"
+CURRENCY_COST_NOTE = "after estimated Upstox charges and slippage (₹10 lakh, about 10 lots, per trade)"

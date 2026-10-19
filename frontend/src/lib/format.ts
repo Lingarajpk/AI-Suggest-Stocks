@@ -2,6 +2,13 @@ const num = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFr
 const compact = new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 });
 
 export const fmtPrice = (v: number | null | undefined) => (v == null ? "—" : num.format(v));
+const byDigits: Record<number, Intl.NumberFormat> = { 2: num };
+/** A price with `dp` decimals (4 for currency pairs, which move in steps of 0.0025). */
+export function fmtPx(v: number | null | undefined, dp = 2) {
+  if (v == null) return "—";
+  byDigits[dp] ??= new Intl.NumberFormat("en-IN", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  return byDigits[dp].format(v);
+}
 export const fmtCompact = (v: number | null | undefined) => (v == null ? "—" : compact.format(v));
 export const fmtPct = (v: number | null | undefined) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
 export const fmtSigned = (v: number | null | undefined) => (v == null ? "—" : `${v > 0 ? "+" : ""}${num.format(v)}`);

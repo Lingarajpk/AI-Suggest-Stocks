@@ -6,14 +6,16 @@ Instrument keys (e.g. ``NSE_EQ|<ISIN>``) are taken from the downloaded file, nev
 import gzip
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import httpx
 
+from app.market_session import IST
+
 log = logging.getLogger(__name__)
 
-KEEP_SEGMENTS = {"NSE_EQ", "BSE_EQ", "NSE_INDEX", "BSE_INDEX"}
+KEEP_SEGMENTS = {"NSE_EQ", "BSE_EQ", "NSE_INDEX", "BSE_INDEX", "NCD_FO"}
 
 # Candidate names to look up in the master file for each dashboard index.
 INDEX_CANDIDATES = {
@@ -103,3 +105,18 @@ class InstrumentMaster:
                     if _norm(r.get(field)) == cand:
                         return r
         return None
+
+    def currency_contracts(self, pair: str, kinds: tuple[str, ...]) -> list[dict]:
+        """NSE currency derivatives of one pair (e.g. USDINR), FUT or CE/PE, with the expiry as YYYY-MM-DD."""
+        out = []
+        for r in self._records:
+            if r.get("segment") == "NCD_FO" and r.get("name") == pair and r.get("instrument_type") in kinds and r.get("expiry"):
+                out.append({**r, "expiry": _expiry_date(r["expiry"])})
+        return out
+
+
+def _expiry_date(value) -> str:
+    """The master file gives expiries in epoch milliseconds (end of the expiry day, IST)."""
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value / 1000, IST).date().isoformat()
+    return str(value)[:10]

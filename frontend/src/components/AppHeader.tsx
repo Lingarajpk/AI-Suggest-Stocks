@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { Activity, LayoutGrid, Moon, Search, Star, Sun, Zap } from "lucide-react";
+import { Activity, Globe, LayoutGrid, Moon, Search, Star, Sun, Zap } from "lucide-react";
 import { useSearch, type ApiError } from "@/lib/api";
 import { fmtTime } from "@/lib/format";
 import { setTheme, useTheme } from "@/lib/theme";
@@ -19,6 +19,7 @@ const SESSION_LABEL = {
 
 const NAV = [
   { href: "/", label: "Intraday", icon: Zap },
+  { href: "/forex", label: "Forex", icon: Globe },
   { href: "/watchlist", label: "Watchlist", icon: Star },
   { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
 ] as const;
@@ -32,6 +33,7 @@ export function AppHeader({
   lastUpdate,
   alerts,
   latestAlert,
+  session,
 }: {
   health?: Health;
   healthError?: ApiError;
@@ -39,6 +41,8 @@ export function AppHeader({
   lastUpdate: string | null;
   alerts: Alert[];
   latestAlert: Alert | null;
+  /** Pages for another market (forex: 09:00-17:00) pass their own session instead of the stock market's. */
+  session?: { state: Health["session"]; label: string };
 }) {
   const pathname = usePathname();
   const active = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
@@ -68,7 +72,7 @@ export function AppHeader({
           </nav>
           <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
             <HeaderSearch />
-            <StatusDot health={health} healthError={healthError} stream={stream} lastUpdate={lastUpdate} />
+            <StatusDot health={health} healthError={healthError} stream={stream} lastUpdate={lastUpdate} session={session} />
             <AlertsBell alerts={alerts} health={health} />
             <ThemeToggle />
           </div>
@@ -76,7 +80,7 @@ export function AppHeader({
       </header>
       {/* Phone: tab bar at the bottom, like a trading app */}
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-panel/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
-        <div className="grid grid-cols-3">
+        <div className="grid grid-cols-4">
           {NAV.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
@@ -94,7 +98,9 @@ export function AppHeader({
 }
 
 /** One dot instead of four status pills: green live, amber not live, red offline. Details on tap. */
-function StatusDot({ health, healthError, stream, lastUpdate }: { health?: Health; healthError?: ApiError; stream: StreamStatus; lastUpdate: string | null }) {
+function StatusDot({ health, healthError, stream, lastUpdate, session }: {
+  health?: Health; healthError?: ApiError; stream: StreamStatus; lastUpdate: string | null; session?: { state: Health["session"]; label: string };
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -107,6 +113,7 @@ function StatusDot({ health, healthError, stream, lastUpdate }: { health?: Healt
   const demo = health?.data_mode === "demo";
   const connected = !!health?.upstox?.authenticated;
   const streaming = stream === "open" || stream === "polling";
+  const market = session?.state ?? health?.session;
   const [tone, label] = healthError
     ? (["bg-bear", "Offline"] as const)
     : !health
@@ -115,7 +122,7 @@ function StatusDot({ health, healthError, stream, lastUpdate }: { health?: Healt
         ? (["bg-warn", "Demo"] as const)
         : !connected
           ? (["bg-warn", "Not connected"] as const)
-          : health.session !== "open"
+          : market !== "open"
             ? (["bg-faint", "Closed"] as const)
             : streaming
               ? (["bg-bull", "Live"] as const)
@@ -124,7 +131,7 @@ function StatusDot({ health, healthError, stream, lastUpdate }: { health?: Healt
   const rows: [string, string][] = [
     ["Data", healthError ? "Backend offline" : demo ? "Demo data (not real prices)" : "Upstox live data"],
     ["Upstox", demo ? "—" : connected ? `Connected${health?.upstox?.connected_as ? ` as ${health.upstox.connected_as}` : ""}` : "Not connected"],
-    ["Market", health ? SESSION_LABEL[health.session] : "—"],
+    [session?.label ?? "Market", market ? SESSION_LABEL[market] : "—"],
     ["Prices", streaming ? `Updated ${fmtTime(lastUpdate)}${stream === "polling" ? " (backup feed)" : ""}` : stream === "connecting" ? "Connecting…" : "Reconnecting…"],
   ];
 

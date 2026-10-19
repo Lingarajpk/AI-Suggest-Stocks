@@ -111,9 +111,9 @@ def current(df: pd.DataFrame, intraday: bool, swings: list[Swing]) -> dict:
         where = "above value (VAH)" if close > p["vah"] else "below value (VAL)" if close < p["val"] else "inside the value area"
     return {
         "window": label,
-        "poc": round(p["poc"], 2) if p else None,
-        "vah": round(p["vah"], 2) if p else None,
-        "val": round(p["val"], 2) if p else None,
+        "poc": round(p["poc"], 4) if p else None,
+        "vah": round(p["vah"], 4) if p else None,
+        "val": round(p["val"], 4) if p else None,
         "price_vs_value": where,
         "delta_20_pct": round(100 * recent_delta / vol20, 1),
         "cvd_divergence": last_div,

@@ -2,9 +2,9 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
-from app.market_session import IST, SESSION_CLOSE, SESSION_OPEN
+from app.market_session import EQUITY, IST, MarketHours
 from app.models import Candle, Instrument, Quote, Timeframe
 
 # Indices the dashboard asks for. Availability depends on the provider and entitlement.
@@ -50,6 +50,14 @@ TIMEFRAMES: dict[str, TimeframeSpec] = {
 }
 
 
+def front_month(futures: list[dict], today: date, roll_days: int = 2) -> dict | None:
+    """The monthly future to follow: the nearest one that is more than `roll_days` days from expiry
+    (so the pair switches to the next month two days before the current one expires).
+    `futures` rows need "expiry" (YYYY-MM-DD) and "weekly"."""
+    monthly = sorted((f for f in futures if not f.get("weekly")), key=lambda f: f["expiry"])
+    return next((f for f in monthly if (date.fromisoformat(f["expiry"]) - today).days > roll_days), None)
+
+
 def resample(candles: list[Candle], bucket) -> list[Candle]:
     """Merge consecutive candles that share bucket(candle) (the new bar's start time)."""
     groups: dict[datetime, list[Candle]] = {}
@@ -74,31 +82,31 @@ def to_weekly(daily: list[Candle]) -> list[Candle]:
     return weeks[1:] if len(weeks) > 1 else weeks
 
 
-def session_bucket(minutes: int):
-    """Bucket intraday candles into `minutes`-long bars aligned to the 09:15 open."""
+def session_bucket(minutes: int, hours: MarketHours = EQUITY):
+    """Bucket intraday candles into `minutes`-long bars aligned to the session open (09:15 for equities)."""
     def bucket(c: Candle) -> datetime:
         t = c.time.astimezone(IST)
-        since_open = t.hour * 60 + t.minute - (9 * 60 + 15)
-        start = 9 * 60 + 15 + (since_open // minutes) * minutes
+        since_open = t.hour * 60 + t.minute - hours.open_minutes
+        start = hours.open_minutes + (since_open // minutes) * minutes
         return t.replace(hour=start // 60, minute=start % 60, second=0, microsecond=0)
     return bucket
 
 
-def live_bar_start(now: datetime, minutes: int) -> datetime:
-    """Start of the intraday bar forming at `now` (bars are aligned to the 09:15 open)."""
-    open_at = now.replace(hour=SESSION_OPEN.hour, minute=SESSION_OPEN.minute, second=0, microsecond=0)
+def live_bar_start(now: datetime, minutes: int, hours: MarketHours = EQUITY) -> datetime:
+    """Start of the intraday bar forming at `now` (bars are aligned to the session open)."""
+    open_at = now.replace(hour=hours.open.hour, minute=hours.open.minute, second=0, microsecond=0)
     if now < open_at:
         return open_at
     return open_at + timedelta(minutes=int((now - open_at).total_seconds() // 60 // minutes * minutes))
 
 
-def drop_incomplete(candles: list[Candle], timeframe: Timeframe, now: datetime) -> list[Candle]:
+def drop_incomplete(candles: list[Candle], timeframe: Timeframe, now: datetime, hours: MarketHours = EQUITY) -> list[Candle]:
     """Remove a still-forming last candle so indicators only use completed bars."""
     if not candles:
         return candles
     last = candles[-1]
     start = last.time.astimezone(IST)
-    close_of_day = datetime.combine(start.date(), SESSION_CLOSE, tzinfo=IST)
+    close_of_day = datetime.combine(start.date(), hours.close, tzinfo=IST)
     spec = TIMEFRAMES[timeframe]
     if spec.weekly:  # a week completes at Friday's close
         end = close_of_day + timedelta(days=4 - start.weekday())
@@ -137,6 +145,15 @@ class MarketDataProvider(ABC):
     async def option_chain(self, instrument: Instrument, expiry: str) -> list[dict]:
         """Raw option chain rows in Upstox's /v2/option/chain format."""
         raise ProviderError("not_supported", "Option chains are not available from this data source", 404)
+
+    async def resolve_currencies(self, pairs: list[str]) -> tuple[list[Instrument], list[str]]:
+        """The front-month future of each currency pair (USDINR, EURINR, GBPINR, JPYINR)."""
+        raise ProviderError("not_supported", "Currency futures are not available from this data source", 404)
+
+    async def currency_option_chain(self, pair: str, expiry: str | None, around: float) -> tuple[list[str], list[dict]]:
+        """(upcoming option expiries, raw chain rows near `around` for `expiry` or the nearest one) in the
+        /v2/option/chain format, without greeks (the forex service computes them)."""
+        raise ProviderError("not_supported", "Currency options are not available from this data source", 404)
 
     async def close(self) -> None:
         return None

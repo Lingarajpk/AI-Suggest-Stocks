@@ -21,7 +21,7 @@ const IST_OFFSET = 5.5 * 3600;
 const t = (iso: string) => (Date.parse(iso) / 1000 + IST_OFFSET) as UTCTimestamp;
 
 /** Compact 5-minute chart for an intraday card: candles, session VWAP (±1σ), Supertrend, signal arrows, levels. */
-export function IntradayChart({ card, liveBar, height = 380 }: { card: IntradayCard; liveBar: CandleData | null; height?: number }) {
+export function IntradayChart({ card, liveBar, height = 380, precision = 2 }: { card: IntradayCard; liveBar: CandleData | null; height?: number; precision?: number }) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const s = useRef<Record<string, ISeriesApi<"Candlestick" | "Line">>>({});
@@ -48,6 +48,7 @@ export function IntradayChart({ card, liveBar, height = 380 }: { card: IntradayC
       c.addSeries(LineSeries, { color, lineWidth: width, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     s.current.candles = c.addSeries(CandlestickSeries, {
       upColor: C.bull, downColor: C.bear, borderVisible: false, wickUpColor: C.bull, wickDownColor: C.bear,
+      priceFormat: { type: "price", precision, minMove: 10 ** -precision },
     });
     s.current.vwap = line(C.vwap, 2);
     s.current.vwap_u1 = line(C.vwap, 1, LineStyle.Dotted);
@@ -65,7 +66,7 @@ export function IntradayChart({ card, liveBar, height = 380 }: { card: IntradayC
       lines.current = [];
       fitted.current = false;
     };
-  }, [C]);
+  }, [C, precision]);
 
   const data = card.chart;
   useEffect(() => {

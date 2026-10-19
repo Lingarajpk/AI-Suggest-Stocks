@@ -20,6 +20,9 @@ from app.ai.nvidia import NvidiaExplainer
 from app.alerts import AlertEngine, TelegramNotifier
 from app.cache import create_cache
 from app.config import get_settings
+from app.forex.api import router as forex_router
+from app.forex.news import ForexNews
+from app.forex.service import ForexService
 from app.market_session import IST, is_session_open, is_trading_weekday, now_ist, session_state
 from app.models import Timeframe
 from app.news import NewsService, NewsStore
@@ -122,6 +125,9 @@ async def lifespan(app: FastAPI):
         log.warning("DATA_MODE=demo: serving SYNTHETIC data, not market data")
         provider = DemoProvider()
     service = MarketService(provider, settings)
+    # Forex: its own service (pairs, session, models, caches) and news, on the same data provider.
+    forex = ForexService(provider, settings)
+    app.state.forex = forex
     app.state.http, app.state.cache, app.state.tokens = http, cache, tokens
     app.state.service = service
     app.state.hub = QuoteHub(service)
@@ -146,6 +152,9 @@ async def lifespan(app: FastAPI):
     news.alerts = engine
     app.state.news = news
     news.start()
+    forex_news = ForexNews(settings, http, forex, NewsStore(settings.data_dir / "news_forex.db"))
+    app.state.forex_news = forex_news
+    forex_news.start()
 
     async def warm() -> None:
         # Train the combined-outlook models and pattern stats up front so the first page view is fast.
@@ -156,18 +165,23 @@ async def lifespan(app: FastAPI):
                 await service.strategy_stats(tf)
             except Exception as exc:  # e.g. Upstox not logged in yet: trained on first request instead
                 log.info("warm-up for %s skipped: %s", tf, exc)
+        await forex.warm()  # after the stocks, so the two don't compete for the CPU at start-up
 
     warmer = asyncio.create_task(warm()) if settings.warm_up else None
     desk_warmer = asyncio.create_task(service.desk_warmer()) if settings.warm_up else None
+    forex_desk_warmer = asyncio.create_task(forex.desk_warmer()) if settings.warm_up else None
     keeper = asyncio.create_task(auth_keeper(app, http))
     yield
     if warmer:
         warmer.cancel()
-    if desk_warmer:
-        desk_warmer.cancel()
+    for task in (desk_warmer, forex_desk_warmer):
+        if task:
+            task.cancel()
     keeper.cancel()
     await news.stop()
     news.store.close()
+    await forex_news.stop()
+    forex_news.store.close()
     await engine.stop()
     await app.state.hub.stop()
     await cache.close()
@@ -213,6 +227,7 @@ async def start_token_request(app: FastAPI) -> dict:
 
 
 app = FastAPI(title="AI Stock Intelligence API", version="0.1.0", lifespan=lifespan)
+app.include_router(forex_router)
 # Chart payloads are large JSON arrays: compressing them is the single biggest speed-up on mobile.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(

@@ -2,7 +2,8 @@
 
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, Crosshair } from "lucide-react";
 import { TIMEFRAME_LABEL } from "@/lib/api";
-import { fmtPct, fmtPrice, fmtTime } from "@/lib/format";
+import { fmtPct, fmtTime } from "@/lib/format";
+import { usePx } from "@/lib/priceDigits";
 import type { Quote, SignalHistory, Timeframe } from "@/lib/types";
 import { Panel } from "./ui";
 
@@ -28,6 +29,7 @@ function Message({ tone, icon, title, children }: { tone: Tone; icon: React.Reac
 
 /** Follows the latest BUY/SELL on this chart: holding, turning against it, or exited. */
 export function TradeStatus({ history, quote, timeframe }: { history: SignalHistory; quote: Quote | null; timeframe: Timeframe }) {
+  const fmtPrice = usePx();
   const ot = history.open_trade;
   const ex = history.latest_exit;
   const stats = history.trades;

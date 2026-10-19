@@ -23,8 +23,8 @@ def _num(v) -> float | None:
     return f if math.isfinite(f) else None
 
 
-def _tick(v: float) -> float:
-    return round(round(v / TICK) * TICK, 2)
+def _tick(v: float, tick: float = TICK) -> float:
+    return round(round(v / tick) * tick, 4)
 
 
 def _side(opt: dict | None) -> dict | None:
@@ -37,7 +37,7 @@ def _side(opt: dict | None) -> dict | None:
     return {
         "instrument_key": opt.get("instrument_key"),
         "ltp": ltp,
-        "change": round(ltp - close, 2) if ltp is not None and close else None,
+        "change": round(ltp - close, 4) if ltp is not None and close else None,
         "oi": oi,
         "oi_change": oi - prev_oi if oi is not None and prev_oi is not None else None,
         "volume": _num(md.get("volume")),
@@ -101,7 +101,7 @@ def summarize(rows: list[dict], spot: float | None) -> dict:
     atm_iv = round(sum(x["iv"] for x in ivs) / len(ivs), 2) if ivs else None
     straddle = None
     if atm_row and (atm_row.get("call") or {}).get("ltp") and (atm_row.get("put") or {}).get("ltp"):
-        straddle = round(atm_row["call"]["ltp"] + atm_row["put"]["ltp"], 2)
+        straddle = round(atm_row["call"]["ltp"] + atm_row["put"]["ltp"], 4)
     call_wall = max(rows, key=lambda r: _oi(r, "call"))["strike"] if call_oi else None
     put_wall = max(rows, key=lambda r: _oi(r, "put"))["strike"] if put_oi else None
 
@@ -138,7 +138,8 @@ def _delta(side: dict, kind: str, strike: float, spot: float) -> float:
     return min(0.95, max(0.05, 0.5 + m * 25))
 
 
-def pick_option(rows: list[dict], spot: float, kind: str, target: float, stop: float, lot_size: int | None) -> dict | None:
+def pick_option(rows: list[dict], spot: float, kind: str, target: float, stop: float, lot_size: int | None,
+                tick: float = TICK) -> dict | None:
     """The near-ATM option of one side with delta closest to ~0.55, a tight spread and real open interest."""
     side_key = "call" if kind == "CE" else "put"
     atm = atm_strike(rows, spot)
@@ -163,8 +164,8 @@ def pick_option(rows: list[dict], spot: float, kind: str, target: float, stop: f
     entry = s["ask"] if s.get("ask") and s["ask"] > 0 else s["ltp"]
     move_t, move_s = abs(target - spot), abs(spot - stop)
     # Second-order (delta + gamma) estimate of the premium when the index reaches its target or stop.
-    prem_t = _tick(entry + delta * move_t + 0.5 * gamma * move_t**2)
-    prem_s = _tick(max(TICK, entry - delta * move_s + 0.5 * gamma * move_s**2))
+    prem_t = _tick(entry + delta * move_t + 0.5 * gamma * move_t**2, tick)
+    prem_s = _tick(max(tick, entry - delta * move_s + 0.5 * gamma * move_s**2), tick)
     lot = int(lot_size) if lot_size else None
     return {
         "kind": kind,
@@ -172,7 +173,7 @@ def pick_option(rows: list[dict], spot: float, kind: str, target: float, stop: f
         "instrument_key": s.get("instrument_key"),
         "moneyness": "ATM" if best["strike"] == atm else ("ITM" if (best["strike"] < spot) == (kind == "CE") else "OTM"),
         "ltp": s["ltp"],
-        "entry": _tick(entry),
+        "entry": _tick(entry, tick),
         "target": prem_t,
         "stop": prem_s,
         "delta": round(delta, 2),
@@ -184,12 +185,13 @@ def pick_option(rows: list[dict], spot: float, kind: str, target: float, stop: f
         "profit_per_lot": round((prem_t - entry) * lot, 2) if lot else None,
         "loss_per_lot": round((entry - prem_s) * lot, 2) if lot else None,
         "theta_per_lot": round(abs(s["theta"]) * lot, 2) if lot and s.get("theta") else None,
-        "underlying_target": round(target, 2),
-        "underlying_stop": round(stop, 2),
+        "underlying_target": round(target, 4),
+        "underlying_stop": round(stop, 4),
     }
 
 
-def recommend(rows: list[dict], spot: float | None, card: dict | None, summary: dict, lot_size: int | None) -> dict:
+def recommend(rows: list[dict], spot: float | None, card: dict | None, summary: dict, lot_size: int | None,
+              tick: float = TICK) -> dict:
     """BUY CE / BUY PE / WAIT from the index's intraday call, with the chain's OI as a cross-check."""
     if not rows or spot is None:
         return {"action": "WAIT", "reason": "No option prices available.", "pick": None, "candidates": {}}
@@ -203,13 +205,13 @@ def recommend(rows: list[dict], spot: float | None, card: dict | None, summary: 
             t, s = levels["target"], levels["stop"]
         else:
             t, s = spot + d * 2.5 * atr, spot - d * 1.5 * atr
-        cands[kind] = pick_option(rows, spot, kind, t, s, lot_size)
+        cands[kind] = pick_option(rows, spot, kind, t, s, lot_size, tick)
 
     bias = summary.get("bias")
     if verdict in ("BUY", "SELL"):
         kind = "CE" if verdict == "BUY" else "PE"
         word = "up" if verdict == "BUY" else "down"
-        what = "Index" if ((card or {}).get("instrument") or {}).get("kind") == "index" else "Stock"
+        what = {"index": "Index", "currency": "Currency pair"}.get(((card or {}).get("instrument") or {}).get("kind"), "Stock")
         reason = f"{what} intraday call is {verdict}: {(card or {}).get('reason') or ''}".strip()
         against = (verdict == "BUY" and bias == "bearish") or (verdict == "SELL" and bias == "bullish")
         if against:

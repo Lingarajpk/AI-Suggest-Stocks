@@ -278,6 +278,15 @@ class NewsStore:
 
 # ---- service ---------------------------------------------------------------------
 class NewsService:
+    # What the AI is asked to rate, and how; subclasses (forex) change these.
+    score_prompt = SCORE_PROMPT
+
+    def subject(self, symbol: str, name: str) -> str:
+        return f"Company: {name} (NSE: {symbol})"
+
+    def fallback_score(self, title: str) -> dict:
+        return keyword_score(title)
+
     def __init__(self, settings: Settings, http: httpx.AsyncClient, service, store: NewsStore) -> None:
         self.settings = settings
         self.http = http
@@ -336,8 +345,8 @@ class NewsService:
                     headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
                     json={"model": self.settings.nvidia_model, "temperature": 0, "max_tokens": 120 + 60 * len(titles),
                           "chat_template_kwargs": {"enable_thinking": False},
-                          "messages": [{"role": "system", "content": SCORE_PROMPT},
-                                       {"role": "user", "content": f"Company: {name} (NSE: {symbol})\n{numbered}"}]},
+                          "messages": [{"role": "system", "content": self.score_prompt},
+                                       {"role": "user", "content": f"{self.subject(symbol, name)}\n{numbered}"}]},
                     timeout=60,
                 )
                 if resp.status_code == 200:
@@ -348,7 +357,7 @@ class NewsService:
                 log.warning("news LLM scoring fell back to keywords (HTTP %s)", resp.status_code)
             except (httpx.HTTPError, KeyError, ValueError) as exc:
                 log.warning("news LLM scoring failed: %s", exc.__class__.__name__)
-        return [keyword_score(t) for t in titles]
+        return [self.fallback_score(t) for t in titles]
 
     async def _instruments(self) -> list:
         """Universe stocks plus the dashboard indices (index news drives intraday moves)."""

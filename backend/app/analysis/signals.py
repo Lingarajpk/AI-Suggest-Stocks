@@ -158,10 +158,10 @@ def evaluate(
     if not no_trade and atr:
         scenario = {
             "direction": "long" if d > 0 else "short",
-            "entry_low": round(close - 0.25 * atr, 2),
-            "entry_high": round(close + 0.25 * atr, 2),
-            "target": round(target, 2),
-            "stop_loss": round(stop, 2),
+            "entry_low": round(close - 0.25 * atr, 4),
+            "entry_high": round(close + 0.25 * atr, 4),
+            "target": round(target, 4),
+            "stop_loss": round(stop, 4),
             "risk_reward": round(rr, 2),
             "target_capped_by": capped_by,
             "basis": "ATR(14) multiples (stop 1.5x, target 2.5x, capped at nearest swing level). A scenario, not a forecast.",

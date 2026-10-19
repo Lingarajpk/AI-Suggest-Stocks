@@ -4,8 +4,8 @@ const IST_MS = 5.5 * 3600 * 1000;
 const BAR_MINUTES: Record<Timeframe, number> = { "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 0, "1w": 0 };
 const SESSION_OPEN_MIN = 9 * 60 + 15;
 
-/** Start of the bar containing `ms`, as an ISO string (bars are aligned to the 09:15 IST open). */
-function barStart(ms: number, tf: Timeframe): string {
+/** Start of the bar containing `ms`, as an ISO string (bars are aligned to the session open, 09:15 IST for stocks). */
+function barStart(ms: number, tf: Timeframe, openMin = SESSION_OPEN_MIN): string {
   const ist = new Date(ms + IST_MS); // fields read with getUTC* are IST wall-clock values
   const dayStartUtc = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()) - IST_MS;
   if (tf === "1d") return new Date(dayStartUtc).toISOString();
@@ -15,15 +15,17 @@ function barStart(ms: number, tf: Timeframe): string {
   }
   const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
   const size = BAR_MINUTES[tf];
-  const offset = Math.max(0, Math.floor((mins - SESSION_OPEN_MIN) / size) * size);
-  return new Date(dayStartUtc + (SESSION_OPEN_MIN + offset) * 60_000).toISOString();
+  const offset = Math.max(0, Math.floor((mins - openMin) / size) * size);
+  return new Date(dayStartUtc + (openMin + offset) * 60_000).toISOString();
 }
 
 /**
  * The still-forming candle, kept current with the latest quote. Display only:
  * signals and indicators are always computed from completed candles on the backend.
  */
-export function buildLiveBar(tf: Timeframe, forming: CandleData | null | undefined, lastCompleted: CandleData | undefined, quote: Quote | null): CandleData | null {
+export function buildLiveBar(
+  tf: Timeframe, forming: CandleData | null | undefined, lastCompleted: CandleData | undefined, quote: Quote | null, openMin = SESSION_OPEN_MIN,
+): CandleData | null {
   const lastMs = lastCompleted ? Date.parse(lastCompleted.time) : 0;
   if (!quote || (quote.freshness !== "polled" && quote.freshness !== "demo")) {
     return forming ?? null;
@@ -54,7 +56,7 @@ export function buildLiveBar(tf: Timeframe, forming: CandleData | null | undefin
     };
   }
 
-  const start = barStart(at, tf);
+  const start = barStart(at, tf, openMin);
   if (Date.parse(start) <= lastMs) return null;
   if (forming && Date.parse(forming.time) === Date.parse(start)) {
     return { ...forming, high: Math.max(forming.high, price), low: Math.min(forming.low, price), close: price };

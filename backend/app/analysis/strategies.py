@@ -172,7 +172,7 @@ def fair_value_gaps(df: pd.DataFrame, ind: pd.DataFrame) -> tuple[dict[str, tupl
             elif h[i] < l[i - 2] and l[i - 2] - h[i] >= FVG_MIN * a[i]:
                 zones.append({"lo": float(h[i]), "hi": float(l[i - 2]), "dir": -1, "kind": "fvg", "born": i, "start": i - 2})
     idx = df.index
-    open_zones = [{"kind": z["kind"], "direction": "up" if z["dir"] == 1 else "down", "low": round(z["lo"], 2), "high": round(z["hi"], 2),
+    open_zones = [{"kind": z["kind"], "direction": "up" if z["dir"] == 1 else "down", "low": round(z["lo"], 4), "high": round(z["hi"], 4),
                    "start_time": idx[z.get("start", z["born"])].isoformat(), "since_time": idx[z["born"]].isoformat()}
                   for z in zones[-8:]]
     for i in range(min(n, MIN_BARS // 2)):
@@ -367,8 +367,8 @@ def block(df: pd.DataFrame, ind: pd.DataFrame, res: dict, with_series: bool) -> 
         p_up, p_dn = res["probs"][k]
         table.append({
             "atr_mult": k,
-            "up_level": round(c + k * a, 2) if a else None,
-            "down_level": round(c - k * a, 2) if a else None,
+            "up_level": round(c + k * a, 4) if a else None,
+            "down_level": round(c - k * a, 4) if a else None,
             "p_up_pct": None if pd.isna(p_up.iloc[-1]) else round(100 * float(p_up.iloc[-1]), 1),
             "p_down_pct": None if pd.isna(p_dn.iloc[-1]) else round(100 * float(p_dn.iloc[-1]), 1),
         })

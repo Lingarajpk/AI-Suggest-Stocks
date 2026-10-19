@@ -1,8 +1,9 @@
 "use client";
 
 import { Crosshair } from "lucide-react";
-import { TIMEFRAME_LABEL, edgeVerdict, isIntraday, useStrategyStats } from "@/lib/api";
-import { fmtPct, fmtPrice, fmtTime } from "@/lib/format";
+import { TIMEFRAME_LABEL, edgeVerdict, isIntraday, useStrategyStats, type Market } from "@/lib/api";
+import { fmtPct, fmtTime } from "@/lib/format";
+import { usePx } from "@/lib/priceDigits";
 import type { StrategyBlock, StrategyState, StrategyStatsRow, Timeframe } from "@/lib/types";
 import { Panel } from "./ui";
 
@@ -19,8 +20,9 @@ const STATE_LABEL: Record<StrategyState["state"], string> = { long: "▲ long", 
 const TONE = { bull: "text-bull", bear: "text-bear", warn: "text-warn", muted: "text-faint" };
 
 /** Stock page: what each strategy says right now, with its pooled track record next to it. */
-export function StrategiesPanel({ block, timeframe }: { block: StrategyBlock | null | undefined; timeframe: Timeframe }) {
-  const { data: stats } = useStrategyStats(timeframe);
+export function StrategiesPanel({ block, timeframe, market = "stocks" }: { block: StrategyBlock | null | undefined; timeframe: Timeframe; market?: Market }) {
+  const fmtPrice = usePx();
+  const { data: stats } = useStrategyStats(timeframe, market);
   const pooled = new Map((stats?.rows ?? []).map((r) => [r.key, r]));
   return (
     <Panel
@@ -210,8 +212,8 @@ function StatsRows({ rows }: { rows: StrategyStatsRow[] }) {
 }
 
 /** Full-width table: every strategy and candlestick measured on every stock. */
-export function StrategyStatsTable({ timeframe }: { timeframe: Timeframe }) {
-  const { data, error, isLoading } = useStrategyStats(timeframe);
+export function StrategyStatsTable({ timeframe, market = "stocks" }: { timeframe: Timeframe; market?: Market }) {
+  const { data, error, isLoading } = useStrategyStats(timeframe, market);
   const strategies = (data?.rows ?? []).filter((r) => r.group === "strategy");
   const candles = (data?.rows ?? []).filter((r) => r.group === "candlestick");
   const head = (label: string) => (

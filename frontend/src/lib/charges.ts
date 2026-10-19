@@ -7,12 +7,16 @@ export const RATES = {
   delivery: { brokeragePct: 0.025, brokerageCap: 20, sttSellPct: 0.001, sttBuyPct: 0.001, stampBuyPct: 0.00015, dp: 18.5 },
   // Index/stock options (buying): flat ₹20 per order, STT 0.1% of the sell premium, NSE options transaction 0.03503%.
   option: { brokeragePct: 1, brokerageCap: 20, sttSellPct: 0.001, sttBuyPct: 0, stampBuyPct: 0.00003, dp: 0, exchangePct: 0.0003503 },
+  // NSE currency futures: ₹20 or 0.05% per order, no STT, transaction charge 0.00035%, stamp 0.0001% on buys.
+  currency: { brokeragePct: 0.0005, brokerageCap: 20, sttSellPct: 0, sttBuyPct: 0, stampBuyPct: 0.000001, dp: 0, exchangePct: 0.0000035 },
+  // NSE currency options (buying): ₹20 per order, no STT, transaction charge 0.031% of premium.
+  currency_option: { brokeragePct: 1, brokerageCap: 20, sttSellPct: 0, sttBuyPct: 0, stampBuyPct: 0.000001, dp: 0, exchangePct: 0.00031 },
   exchangePct: 0.0000297, // NSE transaction charge
   sebiPct: 0.000001, // ₹10 per crore
   gstPct: 0.18, // on brokerage + exchange + SEBI (+ DP)
 };
 
-export type Product = "intraday" | "delivery" | "option";
+export type Product = "intraday" | "delivery" | "option" | "currency" | "currency_option";
 
 export interface Charges {
   brokerage: number;

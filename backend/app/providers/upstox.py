@@ -17,7 +17,7 @@ import httpx
 
 from app.cache import Cache
 from app.config import Settings
-from app.market_session import IST, SESSION_OPEN, is_session_open, is_trading_weekday, now_ist
+from app.market_session import EQUITY, IST, MarketHours, hours_for, is_session_open, is_trading_weekday, now_ist
 from app.models import Candle, Instrument, Quote, Timeframe
 from app.providers.base import (
     DASHBOARD_INDICES,
@@ -27,6 +27,7 @@ from app.providers.base import (
     ProviderError,
     RateLimited,
     drop_incomplete,
+    front_month,
     live_bar_start,
     to_weekly,
 )
@@ -50,7 +51,7 @@ UPSTOX_INTERVALS: dict[str, tuple[str, int, int]] = {
 MAX_QUOTE_KEYS = 500
 
 
-def parse_quote(payload: dict, fetched_at: datetime, stale_after: int, source_symbol: str) -> Quote:
+def parse_quote(payload: dict, fetched_at: datetime, stale_after: int, source_symbol: str, hours: MarketHours = EQUITY) -> Quote:
     last_price = float(payload["last_price"])
     net_change = payload.get("net_change")
     change = float(net_change) if net_change is not None else None
@@ -63,7 +64,7 @@ def parse_quote(payload: dict, fetched_at: datetime, stale_after: int, source_sy
     if ltt_raw not in (None, "", "0", 0):
         last_trade_time = datetime.fromtimestamp(int(ltt_raw) / 1000, tz=timezone.utc).astimezone(IST)
 
-    if not is_session_open(fetched_at):
+    if not is_session_open(fetched_at, hours):
         freshness = "market_closed"
     elif last_trade_time is None or (fetched_at - last_trade_time).total_seconds() > stale_after:
         freshness = "stale"
@@ -264,6 +265,60 @@ class UpstoxProvider(MarketDataProvider):
             )
         return resolved, missing
 
+    # ---- currency (NSE currency derivatives) --------------------------
+    async def resolve_currencies(self, pairs: list[str]) -> tuple[list[Instrument], list[str]]:
+        await self.master.ensure_loaded()
+        today = now_ist().date()
+        resolved, missing = [], []
+        for pair in pairs:
+            fut = front_month(self.master.currency_contracts(pair, ("FUT",)), today)
+            if fut is None:
+                missing.append(pair)
+                continue
+            resolved.append(Instrument(
+                symbol=pair, name=fut.get("trading_symbol") or pair, exchange="NSE", segment=fut["segment"],
+                instrument_key=fut["instrument_key"], kind="currency", contract=fut.get("trading_symbol"),
+                expiry=fut["expiry"], lot_units=float(fut.get("qty_multiplier") or 1000),
+                tick_size=float(fut.get("tick_size") or 0.25) / 100,  # the master gives the tick in paise
+            ))
+        return resolved, missing
+
+    async def currency_option_chain(self, pair: str, expiry: str | None, around: float) -> tuple[list[str], list[dict]]:
+        """Built from the instrument master and one full-quote call (Upstox's option-chain API covers
+        equity and index options only)."""
+        await self.master.ensure_loaded()
+        today = now_ist().date().isoformat()
+        opts = [o for o in self.master.currency_contracts(pair, ("CE", "PE")) if o["expiry"] >= today]
+        expiries = sorted({o["expiry"] for o in opts})
+        if not expiries:
+            return [], []
+        expiry = expiry if expiry in expiries else expiries[0]
+        strikes = sorted({float(o["strike_price"]) for o in opts if o["expiry"] == expiry})
+        near = sorted(strikes, key=lambda k: abs(k - around))[:2 * 15 + 1]
+        legs = {(float(o["strike_price"]), o["instrument_type"]): o for o in opts
+                if o["expiry"] == expiry and float(o["strike_price"]) in near}
+        data = await self._get("/v2/market-quote/quotes", {"instrument_key": ",".join(o["instrument_key"] for o in legs.values())})
+        by_key = {p.get("instrument_token"): p for p in data.values()}
+
+        def side(o: dict | None) -> dict | None:
+            if o is None:
+                return None
+            q = by_key.get(o["instrument_key"]) or {}
+            ltp = q.get("last_price")
+            chg = q.get("net_change")
+            depth = q.get("depth") or {}
+            bid = ((depth.get("buy") or [{}])[0] or {}).get("price")
+            ask = ((depth.get("sell") or [{}])[0] or {}).get("price")
+            return {"instrument_key": o["instrument_key"],
+                    "market_data": {"ltp": ltp, "close_price": (ltp - chg) if ltp is not None and chg is not None else None,
+                                    "oi": q.get("oi"), "prev_oi": None, "volume": q.get("volume"),
+                                    "bid_price": bid or None, "ask_price": ask or None},
+                    "option_greeks": {}}
+
+        rows = [{"strike_price": k, "expiry": expiry, "underlying_spot_price": around,
+                 "call_options": side(legs.get((k, "CE"))), "put_options": side(legs.get((k, "PE")))} for k in sorted(near)]
+        return expiries, rows
+
     # ---- options -----------------------------------------------------
     async def option_contracts(self, instrument: Instrument) -> list[dict]:
         data = await self._get("/v2/option/contract", {"instrument_key": instrument.instrument_key})
@@ -290,16 +345,18 @@ class UpstoxProvider(MarketDataProvider):
             for payload in data.values():
                 key = payload.get("instrument_token")
                 if key in by_key and payload.get("last_price") is not None:
-                    out[key] = parse_quote(payload, fetched_at, self._settings.stale_after_seconds, by_key[key].symbol)
+                    out[key] = parse_quote(payload, fetched_at, self._settings.stale_after_seconds, by_key[key].symbol,
+                                           hours_for(by_key[key]))
         return out
 
     # ---- candles -----------------------------------------------------
     async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
         """History (cached for the day) merged with today's intraday candles (cached briefly)."""
         spec = TIMEFRAMES[timeframe]
+        hours = hours_for(instrument)
         if spec.weekly:
             weekly = to_weekly(await self.candles(instrument, "1d", include_partial=True))
-            return weekly if include_partial else drop_incomplete(weekly, timeframe, now_ist())
+            return weekly if include_partial else drop_incomplete(weekly, timeframe, now_ist(), hours)
         now = now_ist()
         unit, interval, max_span = UPSTOX_INTERVALS[timeframe]
         key = urlquote(instrument.instrument_key, safe="")
@@ -323,10 +380,10 @@ class UpstoxProvider(MarketDataProvider):
         today: list[Candle] = []
         # Today's bars (including today's daily candle) come from the intraday endpoint, during and
         # after the session; the historical endpoint only covers completed days.
-        if is_trading_weekday(now.date()) and now.time() >= SESSION_OPEN:
+        if is_trading_weekday(now.date()) and now.time() >= hours.open:
             # Keyed by the bar that is forming now, so a candle that just closed is fetched at once
             # instead of waiting out the cache time.
-            bar = live_bar_start(now, spec.bar_minutes) if spec.bar_minutes else now.date()
+            bar = live_bar_start(now, spec.bar_minutes, hours) if spec.bar_minutes else now.date()
             intra_key = f"candles:upstox:intra:{instrument.instrument_key}:{timeframe}:{now.date()}:{bar}"
             cached = await self._cache.get(intra_key)
             if cached is not None:
@@ -340,10 +397,11 @@ class UpstoxProvider(MarketDataProvider):
                         raise
                     # Daily view still works from history if today's daily candle isn't available.
                     log.warning("intraday daily candle unavailable for %s: %s", instrument.symbol, exc.message)
-                ttl = spec.cache_seconds if is_session_open(now) else 900
-                if spec.bar_minutes and is_session_open(now) and (not today or max(c.time for c in today) < bar):
+                live = is_session_open(now, hours)
+                ttl = spec.cache_seconds if live else 900
+                if spec.bar_minutes and live and (not today or max(c.time for c in today) < bar):
                     ttl = 3  # Upstox hasn't started the new bar yet: ask again in a moment
                 await self._cache.set(intra_key, [c.model_dump(mode="json") for c in today], ttl)
 
         merged = merge_candles(history, today)
-        return merged if include_partial else drop_incomplete(merged, timeframe, now)
+        return merged if include_partial else drop_incomplete(merged, timeframe, now, hours)

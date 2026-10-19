@@ -10,7 +10,12 @@ export interface Instrument {
   instrument_key: string;
   isin: string | null;
   sector: string | null;
-  kind: "equity" | "index";
+  kind: "equity" | "index" | "currency";
+  /** Currency futures only. */
+  contract?: string | null;
+  expiry?: string | null;
+  lot_units?: number | null;
+  tick_size?: number | null;
 }
 
 export interface Quote {
@@ -672,6 +677,11 @@ export interface OptionPick {
 
 export interface OptionChain {
   symbol: string;
+  instrument?: Instrument;
+  /** Premium step: 0.05 for equity/index options, 0.0025 for currency options. */
+  tick?: number;
+  spot_label?: string;
+  greeks_note?: string;
   source: string;
   generated_at: string;
   expiry: string;

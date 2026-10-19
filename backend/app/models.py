@@ -24,7 +24,12 @@ class Instrument(BaseModel):
     instrument_key: str
     isin: str | None = None
     sector: str | None = None
-    kind: Literal["equity", "index"] = "equity"
+    kind: Literal["equity", "index", "currency"] = "equity"
+    # Currency futures only: the contract behind the pair, its expiry, units per lot and price step.
+    contract: str | None = None
+    expiry: str | None = None
+    lot_units: float | None = None
+    tick_size: float | None = None
 
 
 class Quote(BaseModel):

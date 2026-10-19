@@ -897,8 +897,8 @@ def detect(df: pd.DataFrame, ind: pd.DataFrame) -> list[dict]:
             "start_time": iso(s.start),
             "end_time": iso(s.end),
             "detected_time": iso(s.known),
-            "points": [{"time": iso(i), "price": round(p, 2)} for i, p in s.points],
-            "lines": [[{"time": iso(i1), "price": round(p1, 2)}, {"time": iso(min(i2, last)), "price": round(line_at((i1, p1, i2, p2), min(i2, last)), 2)}]
+            "points": [{"time": iso(i), "price": round(p, 4)} for i, p in s.points],
+            "lines": [[{"time": iso(i1), "price": round(p1, 4)}, {"time": iso(min(i2, last)), "price": round(line_at((i1, p1, i2, p2), min(i2, last)), 4)}]
                       for i1, p1, i2, p2 in s.lines if min(i2, last) > i1],
         }
         if r["status"] == "forming":
@@ -920,14 +920,14 @@ def detect(df: pd.DataFrame, ind: pd.DataFrame) -> list[dict]:
         if r.get("entry") is not None:
             item.update(
                 breakout_time=iso(r["entry"]),
-                breakout_level=round(r["level"], 2),
-                entry_price=round(r["entry_price"], 2),
-                target=round(r["target"], 2),
-                stop=round(r["stop"], 2),
+                breakout_level=round(r["level"], 4),
+                entry_price=round(r["entry_price"], 4),
+                target=round(r["target"], 4),
+                stop=round(r["stop"], 4),
                 volume_confirmed=r.get("volume_confirmed"),
                 pnl_pct=r.get("pnl_pct"),
                 exit_time=iso(r["exit"]) if "exit" in r else None,
-                exit_price=round(r["exit_price"], 2) if "exit_price" in r else None,
+                exit_price=round(r["exit_price"], 4) if "exit_price" in r else None,
                 bars_since_breakout=last - r["entry"],
             )
         if r.get("failed_at") is not None:

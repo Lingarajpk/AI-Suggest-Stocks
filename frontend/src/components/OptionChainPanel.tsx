@@ -2,8 +2,8 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Layers3 } from "lucide-react";
-import { useOptionChain } from "@/lib/api";
-import { fmtCompact, fmtDate, fmtPrice, fmtTime } from "@/lib/format";
+import { useOptionChain, type Market } from "@/lib/api";
+import { fmtCompact, fmtDate, fmtPx, fmtTime } from "@/lib/format";
 import type { OptionChain, OptionLeg, OptionPick, OptionRow } from "@/lib/types";
 import { OptionTicket } from "./OptionTicket";
 import { Panel, SkeletonRows } from "./ui";
@@ -16,16 +16,20 @@ export const OPTION_SYMBOLS = ["NIFTY 50", "BANK NIFTY", "SENSEX"];
 const inr = (v: number | null | undefined) => (v == null ? "—" : `₹${Math.abs(Math.round(v)).toLocaleString("en-IN")}`);
 const signedK = (v: number | null | undefined) => (v == null ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmtCompact(Math.abs(v))}`);
 
-/** Option chain for an index or F&O stock; stocks without options get a one-line note. */
-export function OptionChainPanel({ symbol, index = false }: { symbol: string; index?: boolean }) {
+/** Price decimals for a chain: currency premiums move in 0.0025 steps. */
+export const chainDigits = (data: OptionChain | undefined) => (data?.tick != null && data.tick < 0.01 ? 4 : 2);
+
+/** Option chain for an index, F&O stock or currency pair; stocks without options get a one-line note. */
+export function OptionChainPanel({ symbol, index = false, market = "stocks" }: { symbol: string; index?: boolean; market?: Market }) {
   const [expiry, setExpiry] = useState<string | null>(null);
-  const { data, error, isLoading } = useOptionChain(symbol, expiry);
+  const { data, error, isLoading } = useOptionChain(symbol, expiry, market);
+  const fx = market === "forex";
   const [ticket, setTicket] = useState<{ kind: "CE" | "PE"; strike: number } | null>(null);
   const onPick: OnPick = (kind, strike) => setTicket({ kind, strike });
   // The ticket follows the live chain: its leg (price, greeks) refreshes with every poll.
   const ticketRow = ticket && data?.rows.find((r) => r.strike === ticket.strike);
   const ticketLeg = ticket && ticketRow ? (ticket.kind === "CE" ? ticketRow.call : ticketRow.put) : null;
-  if (!index && error?.code === "no_options") {
+  if (!index && !fx && error?.code === "no_options") {
     return (
       <p className="rounded-2xl border border-line bg-panel px-4 py-3 text-xs text-faint">
         <Layers3 className="mr-1.5 inline size-3.5" />
@@ -71,9 +75,9 @@ export function OptionChainPanel({ symbol, index = false }: { symbol: string; in
           <p className="text-[11px] text-faint">Tap any call or put price to open an order ticket.</p>
           <ChainTable data={data} onPick={onPick} />
           <p className="text-[11px] leading-relaxed text-faint">
-            {data.source === "demo" ? "DEMO: synthetic option prices. " : ""}Updated {fmtTime(data.generated_at)} · lot {data.lot_size ?? "—"} ·
-            premium target/stop are estimates from the option&apos;s delta and gamma for the index&apos;s target and stop; time decay
-            (theta) works against option buyers. Not investment advice.
+            {data.source === "demo" ? "DEMO: synthetic option prices. " : ""}Updated {fmtTime(data.generated_at)} · lot {data.lot_size ?? "—"}
+            {fx ? " units" : ""} · premium target/stop are estimates from the option&apos;s delta and gamma for {fx ? "the pair" : "the index"}&apos;s
+            target and stop; time decay (theta) works against option buyers. {data.greeks_note ? `${data.greeks_note} ` : ""}Not investment advice.
           </p>
         </div>
       )}
@@ -90,6 +94,7 @@ export function OptionChainPanel({ symbol, index = false }: { symbol: string; in
 }
 
 function Recommendation({ data, onPick }: { data: OptionChain; onPick: OnPick }) {
+  const dp = chainDigits(data);
   const rec = data.recommendation;
   const pick = rec.pick;
   if (rec.action === "WAIT" || !pick) {
@@ -103,8 +108,8 @@ function Recommendation({ data, onPick }: { data: OptionChain; onPick: OnPick })
         <p className="mt-1.5 text-xs text-muted">{rec.reason}</p>
         {(ce || pe) && (
           <div className="mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
-            {ce && <Candidate label="If it turns BUY" pick={ce} symbol={data.symbol} onPick={onPick} />}
-            {pe && <Candidate label="If it turns SELL" pick={pe} symbol={data.symbol} onPick={onPick} />}
+            {ce && <Candidate label="If it turns BUY" pick={ce} symbol={data.symbol} onPick={onPick} dp={dp} />}
+            {pe && <Candidate label="If it turns SELL" pick={pe} symbol={data.symbol} onPick={onPick} dp={dp} />}
           </div>
         )}
       </div>
@@ -123,12 +128,13 @@ function Recommendation({ data, onPick }: { data: OptionChain; onPick: OnPick })
         </span>
       </p>
       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-        <Level label="Buy at (premium)" value={pick.entry} sub={pick.lot_cost != null ? `${inr(pick.lot_cost)} per lot` : undefined} tone="text-ink" />
-        <Level label="Target" value={pick.target} sub={pick.profit_per_lot != null ? `+${inr(pick.profit_per_lot)} / lot` : undefined} tone="text-bull" />
-        <Level label="Stop-loss" value={pick.stop} sub={pick.loss_per_lot != null ? `−${inr(pick.loss_per_lot)} / lot` : undefined} tone="text-bear" />
+        <Level label="Buy at (premium)" value={pick.entry} dp={dp} sub={pick.lot_cost != null ? `${inr(pick.lot_cost)} per lot` : undefined} tone="text-ink" />
+        <Level label="Target" value={pick.target} dp={dp} sub={pick.profit_per_lot != null ? `+${inr(pick.profit_per_lot)} / lot` : undefined} tone="text-bull" />
+        <Level label="Stop-loss" value={pick.stop} dp={dp} sub={pick.loss_per_lot != null ? `−${inr(pick.loss_per_lot)} / lot` : undefined} tone="text-bear" />
       </div>
       <p className="mt-2 text-xs text-muted">
-        Exit with the index: target when {data.symbol} reaches {fmtPrice(pick.underlying_target)}, stop if it hits {fmtPrice(pick.underlying_stop)}.
+        Exit with {data.instrument?.kind === "currency" ? "the pair" : "the index"}: target when {data.symbol} reaches {fmtPx(pick.underlying_target, dp)}, stop
+        if it hits {fmtPx(pick.underlying_stop, dp)}.
         {pick.theta_per_lot != null && ` Time decay costs about ${inr(pick.theta_per_lot)} per lot per day.`}
       </p>
       <p className={`mt-1.5 text-xs ${rec.against_oi ? "text-warn" : "text-faint"}`}>{rec.reason}</p>
@@ -142,27 +148,27 @@ function Recommendation({ data, onPick }: { data: OptionChain; onPick: OnPick })
   );
 }
 
-function Level({ label, value, sub, tone }: { label: string; value: number; sub?: string; tone: string }) {
+function Level({ label, value, sub, tone, dp }: { label: string; value: number; sub?: string; tone: string; dp: number }) {
   return (
     <div className="rounded-md bg-panel px-2 py-2">
       <p className="text-[11px] text-muted">{label}</p>
-      <p className={`tabular text-lg font-semibold ${tone}`}>₹{fmtPrice(value)}</p>
+      <p className={`tabular text-lg font-semibold ${tone}`}>₹{fmtPx(value, dp)}</p>
       {sub && <p className={`tabular text-[11px] ${tone}`}>{sub}</p>}
     </div>
   );
 }
 
-function Candidate({ label, pick, symbol, onPick }: { label: string; pick: OptionPick; symbol: string; onPick: OnPick }) {
+function Candidate({ label, pick, symbol, onPick, dp }: { label: string; pick: OptionPick; symbol: string; onPick: OnPick; dp: number }) {
   const call = pick.kind === "CE";
   return (
     <button onClick={() => onPick(pick.kind, pick.strike)} className="rounded-md bg-panel px-2.5 py-2 text-left hover:ring-1 hover:ring-line">
       <p className="text-[11px] text-muted">{label}</p>
       <p className={`font-semibold ${call ? "text-bull" : "text-bear"}`}>
-        {pick.strike.toLocaleString("en-IN")} {pick.kind} @ ₹{fmtPrice(pick.entry)}
+        {pick.strike.toLocaleString("en-IN")} {pick.kind} @ ₹{fmtPx(pick.entry, dp)}
       </p>
       <p className="tabular text-[11px] text-faint">
-        target ₹{fmtPrice(pick.target)} (+{inr(pick.profit_per_lot)}/lot) · stop ₹{fmtPrice(pick.stop)} (−{inr(pick.loss_per_lot)}/lot) · if {symbol}{" "}
-        {call ? "rises to" : "falls to"} {fmtPrice(pick.underlying_target)}
+        target ₹{fmtPx(pick.target, dp)} (+{inr(pick.profit_per_lot)}/lot) · stop ₹{fmtPx(pick.stop, dp)} (−{inr(pick.loss_per_lot)}/lot) · if {symbol}{" "}
+        {call ? "rises to" : "falls to"} {fmtPx(pick.underlying_target, dp)}
       </p>
     </button>
   );
@@ -170,15 +176,16 @@ function Candidate({ label, pick, symbol, onPick }: { label: string; pick: Optio
 
 function Summary({ data }: { data: OptionChain }) {
   const s = data.summary;
+  const dp = chainDigits(data);
   const tone = s.bias === "bullish" ? "text-bull" : s.bias === "bearish" ? "text-bear" : "text-muted";
   const chips: [string, string, string?][] = [
-    ["Spot", fmtPrice(data.spot)],
+    [data.spot_label ? "Future" : "Spot", fmtPx(data.spot, dp)],
     ["PCR (OI)", s.pcr?.toFixed(2) ?? "—", s.pcr == null ? undefined : s.pcr >= 1.2 ? "text-bull" : s.pcr <= 0.8 ? "text-bear" : undefined],
     ["Max pain", s.max_pain?.toLocaleString("en-IN") ?? "—"],
     ["Support (put OI)", s.put_wall?.toLocaleString("en-IN") ?? "—", "text-bull"],
     ["Resistance (call OI)", s.call_wall?.toLocaleString("en-IN") ?? "—", "text-bear"],
     ["ATM IV", s.atm_iv != null ? `${s.atm_iv.toFixed(1)}%` : "—"],
-    ["Expected move (straddle)", s.straddle != null ? `±${fmtPrice(s.straddle)}` : "—"],
+    ["Expected move (straddle)", s.straddle != null ? `±${fmtPx(s.straddle, dp)}` : "—"],
     ["OI leans", s.bias, tone],
   ];
   return (
@@ -200,6 +207,7 @@ function ChainTable({ data, onPick }: { data: OptionChain; onPick: OnPick }) {
   const box = useRef<HTMLDivElement>(null);
   const atmRow = useRef<HTMLTableRowElement>(null);
   const spot = data.spot ?? 0;
+  const dp = chainDigits(data);
   const atm = data.summary.atm;
   const pick = data.recommendation.pick;
   const maxOi = Math.max(1, ...data.rows.flatMap((r) => [r.call?.oi ?? 0, r.put?.oi ?? 0]));
@@ -236,7 +244,7 @@ function ChainTable({ data, onPick }: { data: OptionChain; onPick: OnPick }) {
               {i === spotIndex && (
                 <tr>
                   <td colSpan={7} className="bg-accent/10 py-0.5 text-center text-[10px] font-semibold text-accent">
-                    ▲ Spot {fmtPrice(spot)}
+                    ▲ {data.spot_label ? "Future" : "Spot"} {fmtPx(spot, dp)}
                   </td>
                 </tr>
               )}
@@ -248,6 +256,7 @@ function ChainTable({ data, onPick }: { data: OptionChain; onPick: OnPick }) {
                 picked={pick && pick.strike === r.strike ? pick.kind : null}
                 rowRef={r.strike === atm ? atmRow : undefined}
                 onPick={onPick}
+                dp={dp}
               />
             </Fragment>
           ))}
@@ -257,13 +266,13 @@ function ChainTable({ data, onPick }: { data: OptionChain; onPick: OnPick }) {
   );
 }
 
-function Row({ row, spot, maxOi, atm, picked, rowRef, onPick }: {
-  row: OptionRow; spot: number; maxOi: number; atm: boolean; picked: "CE" | "PE" | null; rowRef?: React.Ref<HTMLTableRowElement>; onPick: OnPick;
+function Row({ row, spot, maxOi, atm, picked, rowRef, onPick, dp }: {
+  row: OptionRow; spot: number; maxOi: number; atm: boolean; picked: "CE" | "PE" | null; rowRef?: React.Ref<HTMLTableRowElement>; onPick: OnPick; dp: number;
 }) {
   const ltpButton = (kind: "CE" | "PE", leg: OptionLeg | null) =>
     leg?.ltp ? (
       <button onClick={() => onPick(kind, row.strike)} className="rounded px-1 underline-offset-2 hover:bg-accent/15 hover:underline" title="Open order ticket">
-        {fmtPrice(leg.ltp)}
+        {fmtPx(leg.ltp, dp)}
       </button>
     ) : (
       "—"
