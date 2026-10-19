@@ -27,6 +27,7 @@ from app.providers.base import (
     ProviderError,
     RateLimited,
     drop_incomplete,
+    live_bar_start,
     to_weekly,
 )
 from app.providers.upstox_instruments import InstrumentMaster
@@ -323,7 +324,10 @@ class UpstoxProvider(MarketDataProvider):
         # Today's bars (including today's daily candle) come from the intraday endpoint, during and
         # after the session; the historical endpoint only covers completed days.
         if is_trading_weekday(now.date()) and now.time() >= SESSION_OPEN:
-            intra_key = f"candles:upstox:intra:{instrument.instrument_key}:{timeframe}:{now.date()}"
+            # Keyed by the bar that is forming now, so a candle that just closed is fetched at once
+            # instead of waiting out the cache time.
+            bar = live_bar_start(now, spec.bar_minutes) if spec.bar_minutes else now.date()
+            intra_key = f"candles:upstox:intra:{instrument.instrument_key}:{timeframe}:{now.date()}:{bar}"
             cached = await self._cache.get(intra_key)
             if cached is not None:
                 today = [Candle.model_validate(c) for c in cached]
@@ -337,6 +341,8 @@ class UpstoxProvider(MarketDataProvider):
                     # Daily view still works from history if today's daily candle isn't available.
                     log.warning("intraday daily candle unavailable for %s: %s", instrument.symbol, exc.message)
                 ttl = spec.cache_seconds if is_session_open(now) else 900
+                if spec.bar_minutes and is_session_open(now) and (not today or max(c.time for c in today) < bar):
+                    ttl = 3  # Upstox hasn't started the new bar yet: ask again in a moment
                 await self._cache.set(intra_key, [c.model_dump(mode="json") for c in today], ttl)
 
         merged = merge_candles(history, today)

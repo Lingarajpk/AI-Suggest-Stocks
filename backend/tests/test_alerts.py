@@ -34,7 +34,7 @@ def engine():
     clock = Clock()
     eng = AlertEngine(MarketService(DemoProvider(), settings), settings, clock=clock, session_open=lambda _: True)
 
-    async def no_desk(include_stocks=True):
+    async def no_desk(include_stocks=True, fresh=False):
         return {"indices": [], "entry_timeframe": "5m"}
 
     eng.service.intraday = no_desk
@@ -196,7 +196,7 @@ async def test_intraday_index_alert_only_on_a_fresh_change(engine):
         {"indices": [card], "entry_timeframe": "5m"},  # same candle again: no duplicate
     ]
 
-    async def desk(include_stocks=True):
+    async def desk(include_stocks=True, fresh=False):
         return desks.pop(0)
 
     eng.service.intraday = desk

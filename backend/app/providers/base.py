@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
-from app.market_session import IST, SESSION_CLOSE
+from app.market_session import IST, SESSION_CLOSE, SESSION_OPEN
 from app.models import Candle, Instrument, Quote, Timeframe
 
 # Indices the dashboard asks for. Availability depends on the provider and entitlement.
@@ -82,6 +82,14 @@ def session_bucket(minutes: int):
         start = 9 * 60 + 15 + (since_open // minutes) * minutes
         return t.replace(hour=start // 60, minute=start % 60, second=0, microsecond=0)
     return bucket
+
+
+def live_bar_start(now: datetime, minutes: int) -> datetime:
+    """Start of the intraday bar forming at `now` (bars are aligned to the 09:15 open)."""
+    open_at = now.replace(hour=SESSION_OPEN.hour, minute=SESSION_OPEN.minute, second=0, microsecond=0)
+    if now < open_at:
+        return open_at
+    return open_at + timedelta(minutes=int((now - open_at).total_seconds() // 60 // minutes * minutes))
 
 
 def drop_incomplete(candles: list[Candle], timeframe: Timeframe, now: datetime) -> list[Candle]:

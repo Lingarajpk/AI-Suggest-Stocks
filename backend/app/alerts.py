@@ -219,7 +219,7 @@ class AlertEngine:
         """Intraday calls for the indices and every watchlist stock: alert on a fresh BUY/SELL, and
         again when it's time to exit (target, stop-loss, or the signal ended)."""
         now = self.clock()
-        desk = await self.service.intraday(include_stocks=False)
+        desk = await self.service.intraday(include_stocks=False, fresh=True)
         cards = [c for c in desk["indices"] if "error" not in c]
         index_names = {c["instrument"]["symbol"] for c in cards}
         watched = [s for s in (self.watchlists.all_symbols() if self.watchlists else []) if s not in index_names]

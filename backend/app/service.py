@@ -14,9 +14,9 @@ from app.analysis.history import HORIZON
 from app.analysis.history import signal_history
 from app.analysis.signals import evaluate
 from app.config import Settings
-from app.market_session import now_ist, session_state
+from app.market_session import is_session_open, now_ist, session_state
 from app.models import Instrument, Quote, Timeframe, is_intraday
-from app.providers.base import MarketDataProvider, ProviderError, drop_incomplete
+from app.providers.base import MarketDataProvider, ProviderError, drop_incomplete, live_bar_start
 from app.watchlists import SYMBOL_RE
 
 log = logging.getLogger(__name__)
@@ -27,6 +27,7 @@ TREND_TF: Timeframe = "15m"
 ENTRY_BUY, ENTRY_SELL = 55.0, 45.0
 TREND_BUY, TREND_SELL = 52.0, 48.0
 RULE_LEVEL = 20
+DESK_FRESH_SECONDS = 20  # the intraday desk is rebuilt in the background once older than this
 CHART_SESSIONS = 2
 INDEX_ALIASES = {"NIFTY": "NIFTY50", "NIFTYBANK": "BANKNIFTY"}
 
@@ -92,6 +93,10 @@ class MarketService:
         # Option contracts (expiries, lot size) per index and short-lived chains: key -> (monotonic time, value)
         self._opt_contracts: dict[str, tuple[float, list[dict]]] = {}
         self._opt_chains: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+        # Intraday desk, with and without stocks: include_stocks -> (monotonic time, 5-min bar, desk)
+        self._desk: dict[bool, tuple[float, str, dict]] = {}
+        self._desk_locks: dict[bool, asyncio.Lock] = {}
+        self._desk_tasks: dict[bool, asyncio.Task] = {}
 
     def _memoized(self, key: tuple, stamp: tuple, fn):
         hit = self._memo.get(key)
@@ -446,7 +451,7 @@ class MarketService:
         spot = spot or (quote.last_price if quote else None)
         lot = opt.lot_for(contracts, expiry)
         try:
-            card = await self.intraday_card(inst, with_chart=False)
+            card = self.cached_card(inst.symbol) or await self.intraday_card(inst, with_chart=False)
         except ProviderError:
             raise
         except Exception:  # the chain is still useful without the call
@@ -637,7 +642,73 @@ class MarketService:
         rows = await asyncio.gather(*(one(s) for s in symbols))
         return {"generated_at": now_ist().isoformat(), "source": self.provider.name, "session": session_state(), "rows": rows}
 
-    async def intraday(self, include_stocks: bool = True) -> dict:
+    # ---- intraday desk cache --------------------------------------------------
+    @staticmethod
+    def _entry_bar() -> str:
+        now = now_ist()
+        return live_bar_start(now, 5).isoformat() if is_session_open(now) else now.date().isoformat()
+
+    def _desk_stale(self, hit: tuple[float, str, dict]) -> bool:
+        return time.monotonic() - hit[0] > DESK_FRESH_SECONDS or hit[1] != self._entry_bar()
+
+    async def intraday(self, include_stocks: bool = True, fresh: bool = False) -> dict:
+        """Intraday desk, answered at once from cache. A desk older than 20 s, or from before the current
+        5-minute bar, is still returned but rebuilt in the background (fresh=True waits for the rebuild)."""
+        hit = self._desk.get(include_stocks)
+        if hit and not self._desk_stale(hit):
+            return hit[2]
+        if hit and not fresh:
+            task = self._desk_tasks.get(include_stocks)
+            if not task or task.done():
+                self._desk_tasks[include_stocks] = asyncio.create_task(self._refresh_desk_quietly(include_stocks))
+            return hit[2]
+        return await self._refresh_desk(include_stocks)
+
+    async def _refresh_desk(self, include_stocks: bool) -> dict:
+        async with self._desk_locks.setdefault(include_stocks, asyncio.Lock()):
+            hit = self._desk.get(include_stocks)
+            if hit and not self._desk_stale(hit):
+                return hit[2]  # rebuilt by another caller while this one waited
+            started, bar = time.monotonic(), self._entry_bar()
+            desk = await self._build_intraday(include_stocks)
+            self._desk[include_stocks] = (started, bar, desk)
+            if include_stocks:  # the index-only desk is a subset: share it
+                self._desk[False] = (started, bar, {k: v for k, v in desk.items() if k != "stocks"})
+            return desk
+
+    async def _refresh_desk_quietly(self, include_stocks: bool) -> None:
+        try:
+            await self._refresh_desk(include_stocks)
+        except Exception as exc:
+            log.warning("intraday desk refresh failed: %s", exc)
+
+    def cached_card(self, symbol: str) -> dict | None:
+        """The index's card from a desk that is still current (used by the option chain)."""
+        for include_stocks in (True, False):
+            hit = self._desk.get(include_stocks)
+            if hit and time.monotonic() - hit[0] <= 60 and hit[1] == self._entry_bar():
+                card = next((c for c in hit[2]["indices"] if c.get("instrument", {}).get("symbol") == symbol and "error" not in c), None)
+                if card:
+                    return card
+        return None
+
+    async def desk_warmer(self) -> None:
+        """During the session, rebuild the desk a few seconds after every 5-minute candle closes,
+        so the first visitor after a new candle doesn't wait for the calculation."""
+        while True:
+            now = now_ist()
+            if is_session_open(now):
+                try:
+                    await self.intraday(include_stocks=True, fresh=True)
+                except Exception as exc:
+                    log.info("desk warm-up skipped: %s", exc)
+                now = now_ist()
+                nxt = live_bar_start(now, 5) + timedelta(minutes=5, seconds=4)
+                await asyncio.sleep(max(5.0, (nxt - now).total_seconds()))
+            else:
+                await asyncio.sleep(60)
+
+    async def _build_intraday(self, include_stocks: bool = True) -> dict:
         """Intraday desk: NIFTY 50 / BANK NIFTY / SENSEX first, then stocks with a live BUY/SELL."""
         idx, missing_idx = await self.indices()
         cards = []

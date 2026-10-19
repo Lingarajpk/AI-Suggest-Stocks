@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:3000"
     universe: str = DEFAULT_UNIVERSE
 
-    quote_poll_seconds: float = 5.0
+    quote_poll_seconds: float = 2.0
     # A quote whose last trade is older than this (during market hours) is labelled stale.
     stale_after_seconds: int = 180
 

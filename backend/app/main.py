@@ -158,10 +158,13 @@ async def lifespan(app: FastAPI):
                 log.info("warm-up for %s skipped: %s", tf, exc)
 
     warmer = asyncio.create_task(warm()) if settings.warm_up else None
+    desk_warmer = asyncio.create_task(service.desk_warmer()) if settings.warm_up else None
     keeper = asyncio.create_task(auth_keeper(app, http))
     yield
     if warmer:
         warmer.cancel()
+    if desk_warmer:
+        desk_warmer.cancel()
     keeper.cancel()
     await news.stop()
     news.store.close()

@@ -109,11 +109,29 @@ async function fetchIntraday(url: string): Promise<IntradayDesk> {
   };
 }
 
+const BAR_MS: Partial<Record<Timeframe, number>> = { "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000 };
+const IST_MS = 5.5 * 3600_000;
+const OPEN_MS = (9 * 60 + 15) * 60_000; // bars are aligned to the 09:15 IST open
+
+/** Milliseconds until `delay` after the current intraday bar closes (so the new candle is picked up at once). */
+export function msToNextBar(timeframe: Timeframe, delay = 5_000, now = Date.now()): number | null {
+  const bar = BAR_MS[timeframe];
+  if (!bar) return null;
+  const sinceOpen = (((now + IST_MS) % 86_400_000) - OPEN_MS + 86_400_000) % 86_400_000;
+  return bar - (sinceOpen % bar) + delay;
+}
+
+/** Poll every `normal` ms, but also right after each candle closes. */
+function barAware(timeframe: Timeframe, normal: number, delay?: number): number {
+  const next = msToNextBar(timeframe, delay);
+  return next == null ? normal : Math.min(normal, next);
+}
+
 export function useStock(symbol: string, timeframe: Timeframe) {
   const normal = !isIntraday(timeframe) ? 300_000 : timeframe === "1m" || timeframe === "3m" ? 15_000 : timeframe === "5m" ? 20_000 : 60_000;
   return useSWR<StockDetail, ApiError>(`/api/stocks/${encodeURIComponent(symbol)}?timeframe=${timeframe}`, fetchStock, {
     // While the combined model trains in the background, check back quickly so the outlook appears.
-    refreshInterval: (d) => (d?.model_outlook?.status === "training" ? 4_000 : normal),
+    refreshInterval: (d) => (d?.model_outlook?.status === "training" ? 4_000 : barAware(timeframe, normal)),
     keepPreviousData: true,
   });
 }
@@ -137,7 +155,9 @@ export function useSearch(query: string) {
 
 /** Intraday desk: index BUY/SELL calls (5-min entry, 15-min trend) and stocks with a live call. */
 export function useIntraday() {
-  return useSWR<IntradayDesk, ApiError>("/api/intraday", fetchIntraday, { refreshInterval: 20_000, keepPreviousData: true });
+  // The desk is served from the backend's cache, so polling often is cheap; also refetch just after each
+  // 5-minute candle closes (the backend rebuilds the desk ~4 s after the close).
+  return useSWR<IntradayDesk, ApiError>("/api/intraday", fetchIntraday, { refreshInterval: () => barAware("5m", 10_000, 9_000), keepPreviousData: true });
 }
 
 /** Index option chain with an OI summary and which option to buy (NIFTY 50, BANK NIFTY, SENSEX only). */
