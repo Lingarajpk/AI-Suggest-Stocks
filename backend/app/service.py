@@ -10,6 +10,7 @@ from app.analysis import indicators as ta
 from app.analysis import patterns as pt
 from app.analysis import probability as pb
 from app.analysis import strategies as sx
+from app.analysis import timemachine as tm
 from app.analysis.costs import COST_NOTE, cost_for
 from app.analysis.history import HORIZON
 from app.analysis.history import signal_history
@@ -30,6 +31,8 @@ TREND_BUY, TREND_SELL = 52.0, 48.0
 RULE_LEVEL = 20
 DESK_FRESH_SECONDS = 20  # the intraday desk is rebuilt in the background once older than this
 CHART_SESSIONS = 2
+TM_LOOKBACK_DAYS = 90  # ~60 sessions of 5-minute candles for the Time Machine's pool
+OPENING_RANGE_MINUTES = 15
 INDEX_ALIASES = {"NIFTY": "NIFTY50", "NIFTYBANK": "BANKNIFTY"}
 
 
@@ -46,6 +49,23 @@ def _lean(outlook: dict | None, score: float | None, buy_at: float, sell_at: flo
     if score is None:
         return 0, "none", None
     return (1 if score >= RULE_LEVEL else -1 if score <= -RULE_LEVEL else 0), "rules", None
+
+
+def opening_range(df, timeframe: Timeframe) -> dict | None:
+    """High and low of the latest session's first 15 minutes (completed candles), for 1/3/5/15-minute charts."""
+    from app.providers.base import TIMEFRAMES
+
+    minutes = TIMEFRAMES[timeframe].bar_minutes
+    if df.empty or not minutes or minutes > OPENING_RANGE_MINUTES:
+        return None
+    day = df[df.index.date == df.index[-1].date()]
+    first = day.index[0]
+    rng = day[day.index < first + timedelta(minutes=OPENING_RANGE_MINUTES)]
+    if rng.empty:
+        return None
+    return {"high": round(float(rng["high"].max()), 4), "low": round(float(rng["low"].min()), 4),
+            "start": first.isoformat(), "minutes": OPENING_RANGE_MINUTES,
+            "complete": len(rng) * minutes >= OPENING_RANGE_MINUTES}
 
 
 def _data_issues(sig: dict) -> list[str]:
@@ -390,6 +410,7 @@ class MarketService:
                                                              cost_pct=cost_for(timeframe, inst.kind),
                                                              cost_note=self.cost_note)),
             "patterns": {"current": pt.current(found)},
+            "opening_range": opening_range(df, timeframe),
             "strategies": self._memoized((inst.instrument_key, timeframe, "strategies", with_series), stamp,
                                          lambda: sx.block(df, ind, strat, with_series)),
         }
@@ -481,6 +502,41 @@ class MarketService:
             "rows": opt.window(rows, spot),
         }
 
+    async def time_machine(self, inst: Instrument, side: str, entry: float, stop: float, target: float,
+                           until: str | None = None, seed: int = 19, replays: int = 10_000) -> dict:
+        """10,000 replays of the rest of the session for one plan, plus the same trade on each past session."""
+        from datetime import time as dtime
+
+        try:
+            end = dtime.fromisoformat(until) if until else tm.default_until(self.hours)
+        except ValueError:
+            raise ProviderError("invalid_plan", "Square-off time must look like 15:15", 400) from None
+        key = (inst.instrument_key, side, entry, stop, target, end, seed, replays, self._entry_bar())
+        cache = self.__dict__.setdefault("_tm_cache", {})
+        if key in cache:
+            return cache[key]
+        candles = drop_incomplete(await self.provider.candles(inst, "5m", include_partial=True, lookback_days=TM_LOOKBACK_DAYS),
+                                  "5m", now_ist(), self.hours)
+        df = ta.to_frame(candles)
+        try:
+            res = await asyncio.to_thread(tm.run, df, self.hours, side=side, entry=entry, stop=stop, target=target, now=now_ist(),
+                                          until=end, cost_pct=cost_for("5m", inst.kind), replays=replays, seed=seed)
+        except tm.TimeMachineError as exc:
+            raise ProviderError("invalid_plan", str(exc), 400) from None
+        out = {
+            "symbol": inst.symbol, "instrument": inst.model_dump(), "source": self.provider.name, "generated_at": now_ist().isoformat(),
+            **res,
+            "method": "Each replay rebuilds the rest of the session from this instrument's own 5-minute candles at the same time "
+                      f"of day over its last {res['sessions']} full sessions, scaled to the current price; the stop is checked "
+                      "before the target. The history line is the same trade (same % stop and target, same entry time) on each "
+                      "of those real sessions. A simulation, not a prediction: results, news and halts can do things those "
+                      f"sessions never did. Average R after costs subtracts the round-trip charges and slippage ({self.cost_note}).",
+        }
+        cache[key] = out
+        while len(cache) > 200:  # a few hundred recent plans at most
+            cache.pop(next(iter(cache)))
+        return out
+
     async def intraday_card(self, inst: Instrument, with_chart: bool) -> dict:
         """Intraday call for one instrument: 5-minute entry timing confirmed by the 15-minute trend."""
         a5 = await self.analyse(inst, ENTRY_TF, with_series=with_chart)
@@ -559,6 +615,7 @@ class MarketService:
                             "sell_hit_pct": test5.get("sell_hit_pct"), "sell_calls": test5.get("sell_calls"),
                             "skill_pct": test5.get("skill_pct"), "base_up_pct": test5.get("base_up_pct")},
             "risks": sig5.get("risks", []),
+            "opening_range": a5.get("opening_range"),
             "position": position,
             "action": self._action(verdict, position),
         }

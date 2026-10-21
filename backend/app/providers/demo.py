@@ -95,7 +95,7 @@ class DemoProvider(MarketDataProvider):
 
     def __init__(self) -> None:
         self._series: dict[str, tuple[date, list[Candle]]] = {}
-        self._five: dict[str, tuple[datetime, list[Candle]]] = {}
+        self._five: dict[tuple[str, date | None], tuple[datetime, list[Candle]]] = {}
 
     async def resolve_equities(self, symbols: list[str]) -> tuple[list[Instrument], list[str]]:
         return [
@@ -298,11 +298,12 @@ class DemoProvider(MarketDataProvider):
             )
         return out
 
-    async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
+    async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False,
+                      lookback_days: int | None = None) -> list[Candle]:
         now = now_ist()
         hours, digits = hours_for(instrument), _digits(instrument)
         bars = self._visible_15m(instrument) if timeframe in ("1m", "3m") else self._live_15m(instrument)
-        cutoff = now - timedelta(days=TIMEFRAMES[timeframe].lookback_days)
+        cutoff = now - timedelta(days=lookback_days or TIMEFRAMES[timeframe].lookback_days)
         bars = [c for c in bars if c.time >= cutoff]
         if timeframe == "1m":
             out = [m for c in bars for m in _split_minutes(c, _seed(instrument.symbol), digits) if m.time <= now]
@@ -327,13 +328,13 @@ class DemoProvider(MarketDataProvider):
     def _five_minute(self, inst: Instrument, bars: list[Candle], now: datetime) -> list[Candle]:
         """5-minute bars built from the 1-minute path (cached per minute)."""
         stamp = now.replace(second=0, microsecond=0)
-        hit = self._five.get(inst.instrument_key)
+        hit = self._five.get((inst.instrument_key, bars[0].time.date() if bars else None))
         if hit and hit[0] == stamp:
             return list(hit[1])
         seed = _seed(inst.symbol)
         minutes = [m for c in bars for m in _split_minutes(c, seed, _digits(inst)) if m.time <= now]
         out = _resample(minutes, _bucket_5m)
-        self._five[inst.instrument_key] = (stamp, out)
+        self._five[(inst.instrument_key, bars[0].time.date() if bars else None)] = (stamp, out)
         return list(out)
 
 

@@ -50,6 +50,33 @@ TIMEFRAMES: dict[str, TimeframeSpec] = {
 }
 
 
+def parse_holidays(rows: list[dict]) -> dict[str, tuple[dict[date, str], dict[date, tuple[time, time, str]]]]:
+    """Upstox /v2/market/holidays rows -> {exchange: (closed {date: name}, special sessions {date: (open, close, name)})}.
+    Settlement holidays do not stop trading and are skipped. A trading day outside Monday-Friday (a special
+    Saturday session) or a SPECIAL_TIMING day (Muhurat trading) replaces the normal hours with its own."""
+    out: dict[str, tuple[dict, dict]] = {}
+    for r in rows or []:
+        kind = r.get("holiday_type")
+        try:
+            d = date.fromisoformat(str(r.get("date"))[:10])
+        except ValueError:
+            continue
+        if kind not in ("TRADING_HOLIDAY", "SPECIAL_TIMING"):
+            continue
+        name = r.get("description") or "Exchange holiday"
+        for ex in r.get("closed_exchanges") or []:
+            out.setdefault(ex, ({}, {}))[0][d] = name
+        if kind == "SPECIAL_TIMING" or d.weekday() >= 5:
+            for o in r.get("open_exchanges") or []:
+                try:
+                    start = datetime.fromtimestamp(int(o["start_time"]) / 1000, IST).time()
+                    end = datetime.fromtimestamp(int(o["end_time"]) / 1000, IST).time()
+                except (KeyError, TypeError, ValueError):
+                    continue
+                out.setdefault(o.get("exchange"), ({}, {}))[1][d] = (start, end, name)
+    return out
+
+
 def front_month(futures: list[dict], today: date, roll_days: int = 2) -> dict | None:
     """The monthly future to follow: the nearest one that is more than `roll_days` days from expiry
     (so the pair switches to the next month two days before the current one expires).
@@ -131,8 +158,10 @@ class MarketDataProvider(ABC):
         """Quotes keyed by instrument_key. Missing keys mean no quote was returned."""
 
     @abstractmethod
-    async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
-        """Candles oldest first. The still-forming last candle is included only if include_partial."""
+    async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False,
+                      lookback_days: int | None = None) -> list[Candle]:
+        """Candles oldest first. The still-forming last candle is included only if include_partial.
+        `lookback_days` overrides the timeframe's usual history (the Time Machine wants ~60 sessions of 5-minute bars)."""
 
     async def search(self, query: str, limit: int = 12) -> list[dict]:
         """Equities matching a symbol or company-name query: [{symbol, name, exchange}]."""
@@ -154,6 +183,10 @@ class MarketDataProvider(ABC):
         """(upcoming option expiries, raw chain rows near `around` for `expiry` or the nearest one) in the
         /v2/option/chain format, without greeks (the forex service computes them)."""
         raise ProviderError("not_supported", "Currency options are not available from this data source", 404)
+
+    async def market_holidays(self) -> list[dict]:
+        """This year's exchange holidays in Upstox's /v2/market/holidays format (empty if unknown)."""
+        return []
 
     async def close(self) -> None:
         return None

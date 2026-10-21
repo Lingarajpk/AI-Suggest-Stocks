@@ -78,7 +78,18 @@ export interface Analysis {
   strategies?: StrategyBlock | null;
 }
 
-export type StrategyKey = "trend_momentum" | "liquidity_sweep" | "fvg" | "ifvg" | "amd" | "breakout_prob" | "supertrend_flip" | "macd_divergence";
+export type StrategyKey =
+  | "trend_momentum" | "liquidity_sweep" | "fvg" | "ifvg" | "amd" | "breakout_prob" | "supertrend_flip" | "macd_divergence"
+  | "orb" | "breakout_20" | "flag" | "reclaim_ma20" | "oversold_bounce";
+
+/** High and low of the session's first 15 minutes (intraday charts of 15 minutes or less). */
+export interface OpeningRange {
+  high: number;
+  low: number;
+  start: string;
+  minutes: number;
+  complete: boolean;
+}
 
 export interface StrategyState {
   key: StrategyKey;
@@ -289,6 +300,10 @@ export interface Health {
   nvidia_model: string;
   news?: { enabled: boolean; source: string; scored_by: "nvidia" | "keywords" };
   session: "open" | "closed" | "pre_open";
+  /** Name of today's exchange holiday, when the market is shut for one. */
+  holiday?: string | null;
+  currency_session?: "open" | "closed" | "pre_open";
+  currency_holiday?: string | null;
   server_time: string;
   quote_poll_seconds: number;
   alerts: {
@@ -318,6 +333,7 @@ export interface Point {
 }
 
 export interface StockDetail extends Analysis {
+  opening_range?: OpeningRange | null;
   instrument: Instrument;
   timeframe: Timeframe;
   source: "upstox" | "demo";
@@ -413,6 +429,7 @@ export interface IntradayLeg {
 }
 
 export interface IntradayCard {
+  opening_range?: OpeningRange | null;
   instrument: Instrument;
   quote: Quote | null;
   price: number | null;

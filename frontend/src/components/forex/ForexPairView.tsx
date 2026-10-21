@@ -177,7 +177,7 @@ export function ForexPairView({ pair, initialTimeframe = "15m" }: { pair: string
         lastUpdate={fxq.lastUpdate}
         alerts={stream.alerts}
         latestAlert={stream.latestAlert}
-        session={session ? { state: session, label: "Currency market" } : undefined}
+        session={session ? { state: session, label: "Currency market", holiday: health.data?.currency_holiday } : undefined}
       />
       <main className="mx-auto w-full min-w-0 max-w-[1400px] space-y-5 px-3 py-5 sm:px-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -290,7 +290,9 @@ export function ForexPairView({ pair, initialTimeframe = "15m" }: { pair: string
 
         {data && tab === "Overview" && (
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-            {setup && <ForexCalculator key={`fx-${sym}-${data.timeframe}-${setup.side}`} setup={setup} />}
+            {setup && (
+              <ForexCalculator key={`fx-${sym}-${data.timeframe}-${setup.side}`} setup={setup} atr={data.snapshot.atr14} openingRange={data.opening_range} />
+            )}
             <div className="space-y-5">
               {data.history && <TradeStatus history={data.history} quote={quote} timeframe={data.timeframe} />}
               {data.costs && (

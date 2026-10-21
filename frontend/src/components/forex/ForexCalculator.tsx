@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { FX_TICK, fmtFx, fxPlan, loadFxPrefs, MARGIN_PCT, pairLabel, saveFxPrefs } from "@/lib/forex";
+import type { OpeningRange } from "@/lib/types";
+import { DayTraderPanel } from "../DayTraderTools";
 
 export interface FxSetup {
   pair: string;
@@ -34,7 +36,9 @@ function Num({ label, value, onChange, step = "0.0025" }: { label: string; value
 }
 
 /** Position size in lots for a currency-futures trade, with Upstox charges and an estimated margin. */
-export function ForexCalculator({ setup, onClose }: { setup: FxSetup; onClose?: () => void }) {
+export function ForexCalculator({ setup, onClose, atr, openingRange }: {
+  setup: FxSetup; onClose?: () => void; atr?: number | null; openingRange?: OpeningRange | null;
+}) {
   const [side, setSide] = useState(setup.side);
   const [entry, setEntry] = useState(setup.entry);
   const [stop, setStop] = useState(setup.stop);
@@ -138,6 +142,16 @@ export function ForexCalculator({ setup, onClose }: { setup: FxSetup; onClose?: 
           </p>
         </>
       )}
+      <DayTraderPanel
+        plan={{
+          market: "forex", symbol: setup.pair, side, entry, stop, target, dp: 4, qtyLabel: "Lots", intraday: true,
+          qty: plan?.lots ?? 0, lossAtStop: plan && plan.lots > 0 ? -plan.atStop.net : null, atr, openingRange,
+        }}
+        onLevels={(s, t) => {
+          setStop(s);
+          setTarget(t);
+        }}
+      />
     </section>
   );
 }

@@ -17,7 +17,7 @@ import httpx
 
 from app.cache import Cache
 from app.config import Settings
-from app.market_session import EQUITY, IST, MarketHours, hours_for, is_session_open, is_trading_weekday, now_ist
+from app.market_session import EQUITY, IST, MarketHours, hours_for, is_session_open, is_trading_day, now_ist
 from app.models import Candle, Instrument, Quote, Timeframe
 from app.providers.base import (
     DASHBOARD_INDICES,
@@ -265,6 +265,11 @@ class UpstoxProvider(MarketDataProvider):
             )
         return resolved, missing
 
+    # ---- market calendar ------------------------------------------------
+    async def market_holidays(self) -> list[dict]:
+        data = await self._get("/v2/market/holidays")
+        return data if isinstance(data, list) else []
+
     # ---- currency (NSE currency derivatives) --------------------------
     async def resolve_currencies(self, pairs: list[str]) -> tuple[list[Instrument], list[str]]:
         await self.master.ensure_loaded()
@@ -350,7 +355,8 @@ class UpstoxProvider(MarketDataProvider):
         return out
 
     # ---- candles -----------------------------------------------------
-    async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False) -> list[Candle]:
+    async def candles(self, instrument: Instrument, timeframe: Timeframe, include_partial: bool = False,
+                      lookback_days: int | None = None) -> list[Candle]:
         """History (cached for the day) merged with today's intraday candles (cached briefly)."""
         spec = TIMEFRAMES[timeframe]
         hours = hours_for(instrument)
@@ -361,13 +367,14 @@ class UpstoxProvider(MarketDataProvider):
         unit, interval, max_span = UPSTOX_INTERVALS[timeframe]
         key = urlquote(instrument.instrument_key, safe="")
 
-        hist_key = f"candles:upstox:hist:{instrument.instrument_key}:{timeframe}:{now.date()}"
+        lookback = lookback_days or spec.lookback_days
+        hist_key = f"candles:upstox:hist:{instrument.instrument_key}:{timeframe}:{now.date()}" + (f":{lookback}d" if lookback_days else "")
         cached = await self._cache.get(hist_key)
         if cached is not None:
             history = [Candle.model_validate(c) for c in cached]
         else:
             end = now.date()
-            start = end - timedelta(days=spec.lookback_days)
+            start = end - timedelta(days=lookback)
             requests = []
             chunk_end = end
             while chunk_end >= start:
@@ -380,7 +387,7 @@ class UpstoxProvider(MarketDataProvider):
         today: list[Candle] = []
         # Today's bars (including today's daily candle) come from the intraday endpoint, during and
         # after the session; the historical endpoint only covers completed days.
-        if is_trading_weekday(now.date()) and now.time() >= hours.open:
+        if is_trading_day(now.date(), hours) and now.time() >= hours.open:
             # Keyed by the bar that is forming now, so a candle that just closed is fetched at once
             # instead of waiting out the cache time.
             bar = live_bar_start(now, spec.bar_minutes, hours) if spec.bar_minutes else now.date()

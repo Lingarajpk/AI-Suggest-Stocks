@@ -10,6 +10,7 @@ import { setTheme, useTheme } from "@/lib/theme";
 import type { Alert, Health } from "@/lib/types";
 import type { StreamStatus } from "@/lib/useQuoteStream";
 import { AlertToast, AlertsBell } from "./Alerts";
+import { ToolsToggle } from "./DayTraderTools";
 
 const SESSION_LABEL = {
   open: "Market open",
@@ -42,7 +43,7 @@ export function AppHeader({
   alerts: Alert[];
   latestAlert: Alert | null;
   /** Pages for another market (forex: 09:00-17:00) pass their own session instead of the stock market's. */
-  session?: { state: Health["session"]; label: string };
+  session?: { state: Health["session"]; label: string; holiday?: string | null };
 }) {
   const pathname = usePathname();
   const active = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
@@ -74,6 +75,7 @@ export function AppHeader({
             <HeaderSearch />
             <StatusDot health={health} healthError={healthError} stream={stream} lastUpdate={lastUpdate} session={session} />
             <AlertsBell alerts={alerts} health={health} />
+            <ToolsToggle />
             <ThemeToggle />
           </div>
         </div>
@@ -99,7 +101,7 @@ export function AppHeader({
 
 /** One dot instead of four status pills: green live, amber not live, red offline. Details on tap. */
 function StatusDot({ health, healthError, stream, lastUpdate, session }: {
-  health?: Health; healthError?: ApiError; stream: StreamStatus; lastUpdate: string | null; session?: { state: Health["session"]; label: string };
+  health?: Health; healthError?: ApiError; stream: StreamStatus; lastUpdate: string | null; session?: { state: Health["session"]; label: string; holiday?: string | null };
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -114,6 +116,7 @@ function StatusDot({ health, healthError, stream, lastUpdate, session }: {
   const connected = !!health?.upstox?.authenticated;
   const streaming = stream === "open" || stream === "polling";
   const market = session?.state ?? health?.session;
+  const holiday = session ? session.holiday : health?.holiday;
   const [tone, label] = healthError
     ? (["bg-bear", "Offline"] as const)
     : !health
@@ -131,7 +134,7 @@ function StatusDot({ health, healthError, stream, lastUpdate, session }: {
   const rows: [string, string][] = [
     ["Data", healthError ? "Backend offline" : demo ? "Demo data (not real prices)" : "Upstox live data"],
     ["Upstox", demo ? "—" : connected ? `Connected${health?.upstox?.connected_as ? ` as ${health.upstox.connected_as}` : ""}` : "Not connected"],
-    [session?.label ?? "Market", market ? SESSION_LABEL[market] : "—"],
+    [session?.label ?? "Market", market ? `${SESSION_LABEL[market]}${holiday ? ` · ${holiday}` : ""}` : "—"],
     ["Prices", streaming ? `Updated ${fmtTime(lastUpdate)}${stream === "polling" ? " (backup feed)" : ""}` : stream === "connecting" ? "Connecting…" : "Reconnecting…"],
   ];
 

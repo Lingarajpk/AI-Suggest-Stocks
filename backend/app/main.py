@@ -23,10 +23,10 @@ from app.config import get_settings
 from app.forex.api import router as forex_router
 from app.forex.news import ForexNews
 from app.forex.service import ForexService
-from app.market_session import IST, is_session_open, is_trading_weekday, now_ist, session_state
+from app.market_session import CURRENCY, IST, holiday_name, is_session_open, is_trading_weekday, now_ist, session_state, set_calendar
 from app.models import Timeframe
 from app.news import NewsService, NewsStore
-from app.providers.base import ProviderError
+from app.providers.base import ProviderError, parse_holidays
 from app.providers.demo import DemoProvider
 from app.providers.upstox import UpstoxAuth, UpstoxProvider
 from app.service import MarketService
@@ -171,6 +171,7 @@ async def lifespan(app: FastAPI):
     desk_warmer = asyncio.create_task(service.desk_warmer()) if settings.warm_up else None
     forex_desk_warmer = asyncio.create_task(forex.desk_warmer()) if settings.warm_up else None
     keeper = asyncio.create_task(auth_keeper(app, http))
+    calendar = asyncio.create_task(calendar_keeper(app))
     yield
     if warmer:
         warmer.cancel()
@@ -178,6 +179,7 @@ async def lifespan(app: FastAPI):
         if task:
             task.cancel()
     keeper.cancel()
+    calendar.cancel()
     await news.stop()
     news.store.close()
     await forex_news.stop()
@@ -186,6 +188,23 @@ async def lifespan(app: FastAPI):
     await app.state.hub.stop()
     await cache.close()
     await http.aclose()
+
+
+async def calendar_keeper(app: FastAPI) -> None:
+    """Load this year's NSE / currency holidays from Upstox, then refresh them every 12 hours
+    (retrying every 10 minutes until Upstox is connected)."""
+    while True:
+        delay = 12 * 3600
+        try:
+            rows = await app.state.service.provider.market_holidays()
+            for exchange, (closed, special) in parse_holidays(rows).items():
+                set_calendar(exchange, closed, special)
+            if rows:
+                log.info("market holiday calendar loaded: %d entries", len(rows))
+        except Exception as exc:  # e.g. not connected yet
+            log.info("market holiday calendar not loaded yet: %s", exc)
+            delay = 600
+        await asyncio.sleep(delay)
 
 
 async def auth_keeper(app: FastAPI, http: httpx.AsyncClient) -> None:
@@ -269,6 +288,9 @@ async def health(request: Request):
         "news": {"enabled": settings.news_enabled, "source": "Google News (RSS)",
                  "scored_by": "nvidia" if settings.nvidia_api_key.get_secret_value() else "keywords"},
         "session": session_state(),
+        "holiday": holiday_name(now_ist().date()),
+        "currency_session": session_state(hours=CURRENCY),
+        "currency_holiday": holiday_name(now_ist().date(), CURRENCY),
         "server_time": now_ist().isoformat(),
         "quote_poll_seconds": settings.quote_poll_seconds,
         "alerts": {
@@ -498,6 +520,18 @@ async def intraday(request: Request, stocks: bool = Query(True)):
 async def option_chain(request: Request, symbol: str, expiry: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$")):
     """Option chain for NIFTY 50 / BANK NIFTY / SENSEX, OI summary and which option to buy for the intraday call."""
     return await svc(request).option_chain(symbol, expiry)
+
+
+@app.get("/api/timemachine/{symbol}")
+async def time_machine(request: Request, symbol: str, side: str = Query(..., pattern="^(BUY|SELL)$"), entry: float = Query(..., gt=0),
+                       stop: float = Query(..., gt=0), target: float = Query(..., gt=0),
+                       until: str | None = Query(None, pattern=r"^\d{2}:\d{2}$"), seed: int = Query(19, ge=0, le=10**9),
+                       replays: int = Query(10_000, ge=1_000, le=20_000)):
+    """Optional Day-trader tool: odds of target first / stop first / neither for one plan (10,000 seeded replays)."""
+    inst = await svc(request).instrument(symbol)
+    if inst is None:
+        raise HTTPException(404, f"{symbol.upper()} is not in the configured universe")
+    return await svc(request).time_machine(inst, side, entry, stop, target, until, seed, replays)
 
 
 @app.get("/api/strategies/stats")

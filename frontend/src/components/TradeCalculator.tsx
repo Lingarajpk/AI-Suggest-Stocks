@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Calculator, X } from "lucide-react";
 import { plan, type Product } from "@/lib/charges";
 import { fmtPrice } from "@/lib/format";
+import type { OpeningRange } from "@/lib/types";
+import { DayTraderPanel } from "./DayTraderTools";
 
 const PREFS = "ai-stock:calc";
 export const PREFS_EVENT = "ai-stock:calc-changed";
@@ -51,7 +53,9 @@ function Num({ label, value, onChange, step = "0.05", prefix }: { label: string;
 }
 
 /** Position size from risk, with Upstox charges and net result at the target and at the stop. */
-export function TradeCalculator({ setup, onClose }: { setup: TradeSetup; onClose?: () => void }) {
+export function TradeCalculator({ setup, onClose, atr, openingRange }: {
+  setup: TradeSetup; onClose?: () => void; atr?: number | null; openingRange?: OpeningRange | null;
+}) {
   const [capital, setCapital] = useState(100000);
   const [riskPct, setRiskPct] = useState(1);
   const [side, setSide] = useState(setup.side);
@@ -188,6 +192,18 @@ export function TradeCalculator({ setup, onClose }: { setup: TradeSetup; onClose
             <p className="mt-1 text-[11px] text-faint">Approximate Upstox rates; check the current charges on upstox.com. Slippage not included.</p>
           </details>
         </>
+      )}
+      {!shortDelivery && (
+        <DayTraderPanel
+          plan={{
+            market: "stocks", symbol: setup.symbol, side, entry, stop, target, dp: 2, qtyLabel: "Qty", intraday: product === "intraday",
+            qty: result?.qty ?? 0, lossAtStop: result && result.qty > 0 ? -result.atStop.net : null, atr, openingRange,
+          }}
+          onLevels={(s, t) => {
+            setStop(s);
+            setTarget(t);
+          }}
+        />
       )}
     </section>
   );

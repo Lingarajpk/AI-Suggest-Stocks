@@ -140,6 +140,8 @@ function PairCard({ card, quote }: { card: ForexCard; quote: Quote | null }) {
           <ForexCalculator
             setup={{ pair: sym, side: card.verdict, entry: +entry.toFixed(4), stop: lv.stop, target: lv.target, lotUnits: units, source: "this call" }}
             onClose={() => setCalc(false)}
+            atr={card.atr}
+            openingRange={card.opening_range}
           />
         </div>
       )}
@@ -223,7 +225,7 @@ export function ForexDesk() {
         lastUpdate={fxq.lastUpdate}
         alerts={stream.alerts}
         latestAlert={stream.latestAlert}
-        session={session ? { state: session, label: "Currency market" } : undefined}
+        session={session ? { state: session, label: "Currency market", holiday: health.data?.currency_holiday } : undefined}
       />
       <main className="mx-auto w-full min-w-0 max-w-[1400px] space-y-5 px-4 py-5 sm:px-6">
         <div className="flex flex-wrap items-end justify-between gap-3">

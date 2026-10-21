@@ -37,6 +37,17 @@ async def forex_options(request: Request, pair: str, expiry: str | None = Query(
     return await fx(request).option_chain(pair, expiry)
 
 
+@router.get("/timemachine/{pair}")
+async def forex_time_machine(request: Request, pair: str, side: str = Query(..., pattern="^(BUY|SELL)$"), entry: float = Query(..., gt=0),
+                             stop: float = Query(..., gt=0), target: float = Query(..., gt=0),
+                             until: str | None = Query(None, pattern=r"^\d{2}:\d{2}$"), seed: int = Query(19, ge=0, le=10**9),
+                             replays: int = Query(10_000, ge=1_000, le=20_000)):
+    inst = await fx(request).instrument(pair)
+    if inst is None:
+        raise HTTPException(404, f"{pair.upper()} is not one of the forex pairs ({', '.join(PAIRS)})")
+    return await fx(request).time_machine(inst, side, entry, stop, target, until, seed, replays)
+
+
 @router.get("/strategies/stats")
 async def forex_strategy_stats(request: Request, timeframe: Timeframe = Query("15m")):
     return await fx(request).strategy_stats(timeframe)

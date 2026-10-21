@@ -428,7 +428,14 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
 
         {data && tab === "Overview" && (
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-            {setup && <TradeCalculator key={`plan-${name}-${data.timeframe}-${setup.side}`} setup={setup} />}
+            {setup && (
+              <TradeCalculator
+                key={`plan-${name}-${data.timeframe}-${setup.side}`}
+                setup={setup}
+                atr={data.snapshot.atr14}
+                openingRange={data.opening_range}
+              />
+            )}
             <div className="space-y-5">
               {data.history && <TradeStatus history={data.history} quote={quote} timeframe={data.timeframe} />}
               <RisksPanel risks={sig?.risks ?? []} />

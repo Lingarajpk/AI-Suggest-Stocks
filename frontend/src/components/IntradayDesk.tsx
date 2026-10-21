@@ -145,6 +145,8 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
           <TradeCalculator
             setup={{ symbol: sym, side: card.verdict, entry: +((lv.entry_low + lv.entry_high) / 2).toFixed(2), stop: lv.stop, target: lv.target, source: "this intraday call" }}
             onClose={() => setCalc(false)}
+            atr={card.atr}
+            openingRange={card.opening_range}
           />
         </div>
       )}

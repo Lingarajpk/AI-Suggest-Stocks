@@ -28,6 +28,7 @@ const LEGEND_C = chartPalette("light");
 // Short chart labels for strategy markers (breakout probability flips too often to mark).
 const STRATEGY_TAG: Partial<Record<StrategyKey, string>> = {
   trend_momentum: "T+M", liquidity_sweep: "Sweep", fvg: "FVG", ifvg: "IFVG", amd: "AMD", supertrend_flip: "ST", macd_divergence: "Div",
+  orb: "ORB", breakout_20: "20H", flag: "Flag", reclaim_ma20: "MA20", oversold_bounce: "RSI",
 };
 
 interface Props {
@@ -394,7 +395,7 @@ export const CHART_LEGEND = [
   { label: "● Chart pattern outline / breakout", color: LEGEND_C.pattern },
   { label: "Supertrend 10,3 (green up / red down)", color: LEGEND_C.bull },
   { label: "VWAP ±1σ / ±2σ bands (intraday)", color: LEGEND_C.vwap },
-  { label: "■ Strategy signal (T+M, Sweep, FVG, IFVG, AMD, ST flip, MACD Div) · FVG zones", color: LEGEND_C.strategy },
+  { label: "■ Strategy signal (T+M, Sweep, FVG, IFVG, AMD, ST flip, MACD Div, ORB, 20H breakout, Flag, MA20 reclaim, RSI bounce) · FVG zones", color: LEGEND_C.strategy },
   { label: "● Candlestick pattern", color: LEGEND_C.candle },
   { label: "POC / value area (VAH–VAL)", color: LEGEND_C.profile },
 ];

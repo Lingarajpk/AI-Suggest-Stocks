@@ -14,6 +14,16 @@
   supertrend_flip  Supertrend (10, 3) changes direction.
   macd_divergence  Price makes a lower low (higher high) between confirmed swings while MACD does not.
 
+From the day-trader skill pack (github.com/Jakeschincariol/day-trader-skill, MIT), both directions:
+  orb              Opening-range breakout (intraday): the first completed candle after the first 15 minutes
+                   that CLOSES above the range high (BUY) or below the range low (SELL); one per session,
+                   no new entries in the last part of the session.
+  breakout_20      The close is above every close of the 20 candles before it (BUY), or below all of them (SELL).
+  flag             A strong move over 10 candles (>= 3 ATR), then 5 candles held in a tight range (<= 1.5 ATR),
+                   then a close out of that range in the move's direction.
+  reclaim_ma20     The close crosses back above its 20-candle average (BUY) or falls below it (SELL).
+  oversold_bounce  RSI 14 was under 30 and the candle closes up (BUY); RSI was over 70 and it closes down (SELL).
+
 Every strategy's points are backtested with the same trade rules as the main signal
 (history.simulate_trades) and against the base rate, pooled across the universe.
 """
@@ -47,7 +57,19 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "supertrend_flip": ("Supertrend flip", "trend", "Supertrend (10, 3) changes direction."),
     "macd_divergence": ("MACD divergence", "reversal",
                         "Lower low in price with a higher MACD low (or the mirror) between confirmed swings."),
+    "orb": ("Opening-range breakout", "breakout",
+            "Intraday only: first candle after the first 15 minutes that closes above the range high (or below the low)."),
+    "breakout_20": ("20-candle breakout", "breakout",
+                    "Close above every close of the previous 20 candles (or below all of them)."),
+    "flag": ("Bull / bear flag", "continuation",
+             "Strong move, a tight 5-candle pause, then a close out of the pause in the move's direction."),
+    "reclaim_ma20": ("20-average reclaim", "trend",
+                     "Close crosses back above the 20-candle average (or drops below it)."),
+    "oversold_bounce": ("Oversold bounce", "reversal",
+                        "RSI was under 30 and the candle closes up (or over 70 and it closes down)."),
 }
+ORB_MINUTES = 15
+ORB_LAST_ENTRY = 0.75  # no new opening-range entries in the last quarter of the session
 
 # Extra features offered to the combined outlook model (kept only if they help on unseen data).
 FEATURES: dict[str, str] = {
@@ -241,6 +263,66 @@ def breakout_probability(df: pd.DataFrame, ind: pd.DataFrame) -> tuple[dict[floa
     return out, green
 
 
+def opening_range_breakout(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """First close outside each session's first-15-minute range. The range is the bars that START in the
+    first 15 minutes after that session's first bar, so it works for any session open (09:15 or 09:00)."""
+    h, l, c = df["high"].to_numpy(float), df["low"].to_numpy(float), df["close"].to_numpy(float)
+    n = len(df)
+    buy, sell = np.zeros(n, bool), np.zeros(n, bool)
+    label = [""] * n
+    mins = (df.index.hour * 60 + df.index.minute).to_numpy()
+    days = pd.Series(df.index.date)
+    groups = list(days.groupby(days).indices.values())
+    # Session length from the longest day seen (first bar to last bar start), for the late-entry cut-off.
+    span = max((mins[g[-1]] - mins[g[0]] for g in groups), default=0)
+    for g in groups:
+        start = mins[g[0]]
+        rng = [i for i in g if mins[i] < start + ORB_MINUTES]
+        if not rng or len(rng) == len(g):
+            continue
+        hi, lo = h[rng].max(), l[rng].min()
+        for i in g:
+            if mins[i] < start + ORB_MINUTES:
+                continue
+            if span and mins[i] - start > ORB_LAST_ENTRY * span:
+                break
+            if c[i] > hi:
+                buy[i], label[i] = True, f"closed above the opening range {lo:.2f}-{hi:.2f}"
+                break
+            if c[i] < lo:
+                sell[i], label[i] = True, f"closed below the opening range {lo:.2f}-{hi:.2f}"
+                break
+    return buy, sell, label
+
+
+def _first(cond: pd.Series) -> pd.Series:
+    """True only where a condition turns on (not on every bar it stays on)."""
+    cond = cond.fillna(False).astype(bool)
+    return cond & ~cond.shift(fill_value=False)
+
+
+def classic_setups(df: pd.DataFrame, ind: pd.DataFrame) -> dict[str, tuple[pd.Series, pd.Series]]:
+    """20-candle breakout, flags, 20-average reclaim and oversold bounce: all known at the candle's close."""
+    c, a = df["close"], ind["atr14"]
+    prev_hi = c.shift(1).rolling(20).max()
+    prev_lo = c.shift(1).rolling(20).min()
+    out = {"breakout_20": (_first(c > prev_hi), _first(c < prev_lo))}
+
+    pole = c.shift(5) - c.shift(15)  # the move into the pause (candles i-15 .. i-5)
+    box_hi = c.shift(1).rolling(5).max()  # the pause: the 5 closes before this candle
+    box_lo = c.shift(1).rolling(5).min()
+    tight = (box_hi - box_lo) <= 1.5 * a
+    bull = tight & (pole >= 3 * a) & (box_lo > c.shift(5) - 0.5 * pole) & (c > box_hi)
+    bear = tight & (pole <= -3 * a) & (box_hi < c.shift(5) - 0.5 * pole) & (c < box_lo)
+    out["flag"] = (_first(bull), _first(bear))
+
+    ma = ind["sma20"]
+    out["reclaim_ma20"] = ((c.shift() < ma.shift()) & (c > ma), (c.shift() > ma.shift()) & (c < ma))
+    rsi = ind["rsi14"]
+    out["oversold_bounce"] = ((rsi.shift() < 30) & (c > c.shift()), (rsi.shift() > 70) & (c < c.shift()))
+    return {k: (b.fillna(False).astype(bool), s.fillna(False).astype(bool)) for k, (b, s) in out.items()}
+
+
 def compute(df: pd.DataFrame, ind: pd.DataFrame, timeframe: str) -> dict:
     """All strategies, candlesticks and order-flow proxies for one instrument's completed candles."""
     intraday = is_intraday(timeframe)
@@ -273,6 +355,12 @@ def compute(df: pd.DataFrame, ind: pd.DataFrame, timeframe: str) -> dict:
     signals["supertrend_flip"] = ((st == 1) & (st.shift() == -1), (st == -1) & (st.shift() == 1))
     macd_ev = ta.macd_events(ind, swings)
     signals["macd_divergence"] = (macd_ev["macd_div"] > 0, macd_ev["macd_div"] < 0)
+    if intraday:
+        b, s, labels["orb"] = opening_range_breakout(df)
+    else:
+        b, s, labels["orb"] = np.zeros(n, bool), np.zeros(n, bool), [""] * n
+    signals["orb"] = as_series(b, s)
+    signals.update(classic_setups(df, ind))
 
     cdl = cs.detect_series(df, ind)
     levels = vp.levels_series(df, intraday)
@@ -339,7 +427,7 @@ def block(df: pd.DataFrame, ind: pd.DataFrame, res: dict, with_series: bool) -> 
         elif key == "supertrend_flip":
             state = "long" if v["st_dir"] == 1 else "short" if v["st_dir"] == -1 else "none"
             detail = f"Supertrend {'up' if state == 'long' else 'down'} at {ta.clean(v['st_line'])}"
-        elif key == "amd" and not res["intraday"]:
+        elif key in ("amd", "orb") and not res["intraday"]:
             state, detail = "n/a", "Session-based: only applies to intraday candles."
         elif key == "fvg":
             open_fvg = [z for z in res["zones"] if z["kind"] == "fvg"]
