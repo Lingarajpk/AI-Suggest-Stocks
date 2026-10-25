@@ -1,4 +1,5 @@
 import useSWR from "swr";
+import { toLogin } from "./auth";
 import type { CandleData, Health, IntradayDesk, MarketContext, OptionChain, StrategyLab, Tearsheet, Point, SearchResult, WatchCall, NewsFeed, PatternStatsResult, ScanResult, StockDetail, StockNews, StrategyStatsResult, Timeframe, TodayResult } from "./types";
 
 export class ApiError extends Error {
@@ -27,6 +28,7 @@ export async function fetcher<T>(url: string): Promise<T> {
       // The proxy got no answer: on free hosting the backend sleeps when idle and takes ~30-60 s to wake.
       throw new ApiError(res.status, "backend_waking", "The data server is waking up or busy. Retrying automatically…");
     }
+    if (res.status === 401 && body.error === "login_required") toLogin();
     const detail = typeof body.detail === "string" ? body.detail : undefined;
     throw new ApiError(res.status, body.error ?? "http_error", body.message ?? detail ?? `HTTP ${res.status}`, body.login_url);
   }

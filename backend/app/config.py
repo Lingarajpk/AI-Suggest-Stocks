@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     # Optional. When empty an in-process TTL cache is used.
     redis_url: str = ""
 
+    # Site login. APP_USERS = "Name:pbkdf2_sha256.<iterations>.<salt>.<hash>,Name2:..." (python -m app.auth_users hash); empty = open site.
+    app_users: str = ""
+    session_secret: SecretStr = SecretStr("")
+    session_cookie_secure: bool = True
+
     frontend_origin: str = "http://localhost:3000"
     universe: str = DEFAULT_UNIVERSE
 

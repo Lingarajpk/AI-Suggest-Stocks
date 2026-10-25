@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { wsToken } from "./auth";
 import { showNotification } from "./notify";
 import { currentWatchlist } from "./watchlist";
 import type { Alert, Quote } from "./types";
@@ -84,8 +85,11 @@ export function useQuoteStream(): StreamState {
       if (Date.now() - lastStreamQuotes > STALE_MS) startPolling();
     }, STALE_MS / 2);
 
-    const connect = () => {
-      ws = new WebSocket(WS_URL);
+    const connect = async () => {
+      // With a site login the stream needs a fresh short-lived token on every (re)connect.
+      const token = await wsToken();
+      if (closed) return;
+      ws = new WebSocket(token ? `${WS_URL}?token=${encodeURIComponent(token)}` : WS_URL);
       ws.onopen = () => {
         retry.current = 0;
         setState((s) => ({ ...s, status: poll ? s.status : "open" }));
@@ -149,7 +153,7 @@ export function useQuoteStream(): StreamState {
       })
       .catch(() => {});
 
-    connect();
+    void connect();
     return () => {
       closed = true;
       clearTimeout(timer);

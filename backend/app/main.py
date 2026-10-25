@@ -20,6 +20,7 @@ from app import paper
 from app.ai.debate import Debate
 from app.ai.nvidia import NvidiaExplainer
 from app.alerts import AlertEngine, TelegramNotifier
+from app.auth_users import COOKIE, SESSION_DAYS, WS_TOKEN_SECONDS, Auth
 from app.cache import create_cache
 from app.config import get_settings
 from app.forex.api import router as forex_router
@@ -41,6 +42,7 @@ from app.watchlists import WatchlistStore, clean_symbols, valid_device
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("app")
 settings = get_settings()
+site_auth = Auth(settings.app_users, settings.session_secret.get_secret_value())
 
 
 class QuoteHub:
@@ -309,6 +311,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Reached without a site login: health/keep-alive, the login itself, and what Upstox calls (the Upstox owner
+# endpoints are protected by the admin key instead).
+OPEN_PATHS = {"/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/me",
+              "/api/auth/upstox/login", "/api/auth/upstox/callback", "/api/auth/upstox/request", "/api/auth/upstox/notifier"}
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if (site_auth.enabled and path.startswith("/api") and path not in OPEN_PATHS and request.method != "OPTIONS"
+            and site_auth.verify(request.cookies.get(COOKIE)) is None):
+        return JSONResponse(status_code=401, content={"error": "login_required", "message": "Please log in."})
+    return await call_next(request)
+
 
 @app.exception_handler(ProviderError)
 async def provider_error_handler(_: Request, exc: ProviderError):
@@ -328,6 +344,7 @@ async def health(request: Request):
     tokens: TokenStore = request.app.state.tokens
     return {
         "status": "ok",
+        "login_required": site_auth.enabled,
         "data_mode": settings.data_mode,
         "provider": svc(request).provider.name,
         "upstox": ({**tokens.status(), "owner_protected": bool(settings.admin_key.get_secret_value()),
@@ -355,6 +372,56 @@ async def health(request: Request):
             "signal_timeframe": settings.alert_signal_timeframe,
         },
     }
+
+
+def client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    return fwd.split(",")[0].strip() or (request.client.host if request.client else "?")
+
+
+@app.post("/api/auth/login")
+async def login(request: Request, body: dict = Body(...)):
+    if not site_auth.enabled:  # open site: a placeholder cookie so the frontend's page guard lets everyone in
+        res = JSONResponse({"user": None, "login_required": False})
+        res.set_cookie(COOKIE, "open", max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax", path="/")
+        return res
+    username, password = str(body.get("username") or "")[:64], str(body.get("password") or "")[:200]
+    ip = client_ip(request)
+    if site_auth.locked(username, ip):
+        raise HTTPException(429, "Too many wrong passwords. Try again in 15 minutes.")
+    user = site_auth.check(username, password, ip)
+    if user is None:
+        await asyncio.sleep(0.5)
+        raise HTTPException(401, "Wrong username or password.")
+    log.info("site login: %s", user)
+    res = JSONResponse({"user": user, "login_required": True})
+    res.set_cookie(COOKIE, site_auth.issue(user), max_age=SESSION_DAYS * 86400, httponly=True,
+                   secure=settings.session_cookie_secure, samesite="lax", path="/")
+    return res
+
+
+@app.post("/api/auth/logout")
+async def logout():
+    res = JSONResponse({"user": None})
+    res.delete_cookie(COOKIE, path="/", httponly=True, secure=settings.session_cookie_secure, samesite="lax")
+    return res
+
+
+@app.get("/api/auth/me")
+async def me(request: Request):
+    if not site_auth.enabled:
+        return {"user": None, "login_required": False}
+    user = site_auth.verify(request.cookies.get(COOKIE))
+    if user is None:
+        return JSONResponse(status_code=401, content={"error": "login_required", "message": "Please log in."})
+    return {"user": user, "login_required": True}
+
+
+@app.get("/api/auth/ws-token")
+async def ws_token(request: Request):
+    """Short-lived token for the quotes websocket (it connects to the backend directly, without the cookie)."""
+    user = site_auth.verify(request.cookies.get(COOKIE))
+    return {"token": site_auth.issue(user, kind="ws", seconds=WS_TOKEN_SECONDS) if user else None}
 
 
 def require_owner(key: str) -> None:
@@ -850,6 +917,9 @@ async def explain_stock(request: Request, symbol: str, timeframe: Timeframe = Qu
 async def ws_quotes(ws: WebSocket):
     origin = ws.headers.get("origin")
     if origin and origin != settings.frontend_origin:
+        await ws.close(code=1008)
+        return
+    if site_auth.enabled and site_auth.verify(ws.query_params.get("token"), kind="ws") is None:
         await ws.close(code=1008)
         return
     await ws.accept()

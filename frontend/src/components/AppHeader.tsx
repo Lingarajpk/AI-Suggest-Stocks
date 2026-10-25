@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { Activity, Compass, FlaskConical, Globe, LayoutGrid, Moon, Search, Star, Sun, Wallet, Zap } from "lucide-react";
+import { Activity, Compass, FlaskConical, Globe, LayoutGrid, LogOut, Moon, Search, Star, Sun, Wallet, Zap } from "lucide-react";
 import { useSearch, type ApiError } from "@/lib/api";
+import { logout, useMe } from "@/lib/auth";
 import { fmtTime } from "@/lib/format";
 import { setTheme, useTheme } from "@/lib/theme";
 import type { Alert, Health } from "@/lib/types";
@@ -80,6 +81,7 @@ export function AppHeader({
             <AlertsBell alerts={alerts} health={health} />
             <ToolsToggle />
             <ThemeToggle />
+            <UserMenu />
           </div>
         </div>
       </header>
@@ -164,6 +166,43 @@ function StatusDot({ health, healthError, stream, lastUpdate, session }: {
               </div>
             ))}
           </dl>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The logged-in user's initial; tap for the name and Log out. Hidden when the site has no login. */
+function UserMenu() {
+  const { data: me } = useMe();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  if (!me?.user) return null;
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="grid size-9 place-items-center rounded-full bg-accent/15 text-sm font-bold text-accent hover:bg-accent/25"
+        aria-label={`Logged in as ${me.user}`}
+        title={me.user}
+      >
+        {me.user.slice(0, 1).toUpperCase()}
+      </button>
+      {open && (
+        <div className="absolute right-0 z-30 mt-2 w-52 rounded-2xl border border-line bg-panel p-2 text-sm shadow-xl">
+          <p className="px-3 py-2 text-muted">
+            Logged in as <span className="font-semibold text-ink">{me.user}</span>
+          </p>
+          <button onClick={() => void logout()} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left font-medium text-bear hover:bg-panel-2">
+            <LogOut className="size-4" />
+            Log out
+          </button>
         </div>
       )}
     </div>
