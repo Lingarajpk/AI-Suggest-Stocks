@@ -18,7 +18,7 @@ import { OutlookCard, OutlookReliability } from "./OutlookCard";
 import { PatternStatsTable, PatternsPanel } from "./PatternsPanel";
 import { StrategiesPanel, StrategyStatsTable } from "./StrategiesPanel";
 import { TrackRecordPanel } from "./TrackRecord";
-import { PREFS_EVENT, TradeCalculator, loadPrefs, type TradeSetup } from "./TradeCalculator";
+import { PREFS_EVENT, TradeCalculator, loadPrefs, type TrackRecord, type TradeSetup } from "./TradeCalculator";
 import { TradeStatus } from "./TradeStatus";
 import { Disclaimer } from "./Disclaimer";
 import { CHART_LEGEND, PriceChart, type ChartTrade } from "./PriceChart";
@@ -447,6 +447,8 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
                 setup={setup}
                 atr={data.snapshot.atr14}
                 openingRange={data.opening_range}
+                record={trackRecord(data)}
+                chandelier={{ BUY: data.snapshot.chandelier_long ?? null, SELL: data.snapshot.chandelier_short ?? null }}
               />
             )}
             <div className="space-y-5">
@@ -564,6 +566,16 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
       <Disclaimer />
     </>
   );
+}
+
+/** This chart's past signal trades per side, for the calculator's Kelly cap. */
+function trackRecord(data: StockDetail): Partial<Record<"BUY" | "SELL", TrackRecord>> | undefined {
+  const t = data.history?.trades;
+  if (!t) return undefined;
+  const one = (s: NonNullable<typeof t>["buy"]): TrackRecord => ({
+    winLowPct: s.evidence?.win_rate_low ?? null, avgWinPct: s.avg_win_pct, avgLossPct: s.avg_loss_pct, trades: s.count,
+  });
+  return { BUY: one(t.buy), SELL: one(t.sell) };
 }
 
 function RisksPanel({ risks }: { risks: string[] }) {

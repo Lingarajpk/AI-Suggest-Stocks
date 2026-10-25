@@ -46,9 +46,13 @@ export function roundTrip(product: Product, qty: number, buy: number, sell: numb
   return { brokerage, stt, exchange, sebi, stamp, gst, dp, total: brokerage + stt + exchange + sebi + stamp + gst + dp };
 }
 
+export type SizeLimit = "risk" | "capital" | "volatility" | "kelly";
+
 export interface Plan {
   qty: number;
-  limitedBy: "risk" | "capital";
+  limitedBy: SizeLimit;
+  /** Each limit's quantity, so the page can say which one decided the size. */
+  limits: Partial<Record<SizeLimit, number>>;
   invested: number;
   riskPerShare: number;
   riskRs: number;
@@ -59,16 +63,39 @@ export interface Plan {
   breakeven: number;
 }
 
-/** Quantity that risks `riskPct` of `capital` if the stop is hit, capped by what the capital can buy. */
-export function plan(opts: { capital: number; riskPct: number; side: "BUY" | "SELL"; entry: number; stop: number; target: number; product: Product }): Plan | null {
-  const { capital, riskPct, side, entry, stop, target, product } = opts;
+/** Smallest stop distance worth trading: tighter than this, the spread and normal noise hit it. */
+export const MIN_STOP_PCT = 0.05;
+
+/** Quarter-Kelly risk % from a track record, using the LOW end of the win rate (Wilson) so luck isn't sized up.
+ * Kelly fraction = W - (1 - W) / R, with R = average win / average loss. Null when there is no record. */
+export function kellyRiskPct(winLowPct: number | null | undefined, avgWinPct: number | null | undefined, avgLossPct: number | null | undefined): number | null {
+  if (winLowPct == null || !avgWinPct || !avgLossPct) return null;
+  const w = winLowPct / 100;
+  const r = Math.abs(avgWinPct / avgLossPct);
+  if (!(r > 0)) return null;
+  return Math.max(0, 0.25 * (w - (1 - w) / r) * 100);
+}
+
+/** Quantity that risks `riskPct` of `capital` if the stop is hit, capped by what the capital can buy and,
+ * optionally, by a volatility budget (one ATR move costs no more than riskPct) and by quarter-Kelly.
+ * The extra caps can only make a position smaller, never larger. */
+export function plan(opts: {
+  capital: number; riskPct: number; side: "BUY" | "SELL"; entry: number; stop: number; target: number; product: Product;
+  atr?: number | null; kellyPct?: number | null;
+}): Plan | null {
+  const { capital, riskPct, side, entry, stop, target, product, atr, kellyPct } = opts;
   if (!(capital > 0 && riskPct > 0 && entry > 0 && stop > 0 && target > 0)) return null;
   const long = side === "BUY";
   const riskPerShare = long ? entry - stop : stop - entry;
   if (riskPerShare <= 0) return null;
-  const byRisk = Math.floor((capital * riskPct) / 100 / riskPerShare);
-  const byCapital = Math.floor(capital / entry);
-  const qty = Math.max(0, Math.min(byRisk, byCapital));
+  const limits: Partial<Record<SizeLimit, number>> = {
+    risk: Math.floor((capital * riskPct) / 100 / riskPerShare),
+    capital: Math.floor(capital / entry),
+  };
+  if (atr && atr > 0) limits.volatility = Math.floor((capital * riskPct) / 100 / atr);
+  if (kellyPct != null) limits.kelly = Math.floor((capital * Math.min(kellyPct, riskPct)) / 100 / riskPerShare);
+  const [limitedBy, cap] = (Object.entries(limits) as [SizeLimit, number][]).reduce((a, b) => (b[1] < a[1] ? b : a));
+  const qty = Math.max(0, cap);
   const outcome = (exit: number) => {
     const gross = qty * (long ? exit - entry : entry - exit);
     const charges = long ? roundTrip(product, qty, entry, exit) : roundTrip(product, qty, exit, entry);
@@ -79,7 +106,8 @@ export function plan(opts: { capital: number; riskPct: number; side: "BUY" | "SE
   const perShareCost = qty > 0 ? atTarget.charges.total / qty : 0;
   return {
     qty,
-    limitedBy: byRisk <= byCapital ? "risk" : "capital",
+    limitedBy,
+    limits,
     invested: qty * entry,
     riskPerShare,
     riskRs: qty * riskPerShare,

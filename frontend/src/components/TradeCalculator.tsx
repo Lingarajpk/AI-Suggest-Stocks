@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Calculator, X } from "lucide-react";
-import { plan, type Product } from "@/lib/charges";
+import { MIN_STOP_PCT, kellyRiskPct, plan, type Product, type SizeLimit } from "@/lib/charges";
 import { fmtPrice } from "@/lib/format";
 import type { OpeningRange } from "@/lib/types";
 import { DayTraderPanel } from "./DayTraderTools";
@@ -52,10 +52,48 @@ function Num({ label, value, onChange, step = "0.05", prefix }: { label: string;
   );
 }
 
+/** This chart's past signal trades on one side: feeds the quarter-Kelly cap. */
+export interface TrackRecord {
+  winLowPct: number | null;
+  avgWinPct: number | null;
+  avgLossPct: number | null;
+  trades: number;
+}
+
+type SizingMode = "risk" | "volatility" | "kelly";
+const SIZING_KEY = "ai-stock:sizing";
+const LIMIT_TEXT: Record<SizeLimit, (riskPct: number) => string> = {
+  risk: (r) => `your ${r}% risk at the stop`,
+  capital: () => "your capital",
+  volatility: (r) => `the volatility cap (one ATR move = ${r}% of capital)`,
+  kelly: () => "quarter-Kelly from this chart's track record",
+};
+
 /** Position size from risk, with Upstox charges and net result at the target and at the stop. */
-export function TradeCalculator({ setup, onClose, atr, openingRange }: {
+export function TradeCalculator({ setup, onClose, atr, openingRange, record, chandelier }: {
   setup: TradeSetup; onClose?: () => void; atr?: number | null; openingRange?: OpeningRange | null;
+  record?: Partial<Record<"BUY" | "SELL", TrackRecord>>;
+  /** Chandelier exit levels (22-candle extreme -/+ 3 ATR) for a long and a short. */
+  chandelier?: Partial<Record<"BUY" | "SELL", number | null>>;
 }) {
+  const [mode, setMode] = useState<SizingMode>("risk");
+  useEffect(() => {
+    try {
+      const m = localStorage.getItem(SIZING_KEY);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time read of the saved sizing mode
+      if (m === "volatility" || m === "kelly") setMode(m);
+    } catch {
+      /* storage unavailable */
+    }
+  }, []);
+  const chooseMode = (m: SizingMode) => {
+    setMode(m);
+    try {
+      localStorage.setItem(SIZING_KEY, m);
+    } catch {
+      /* storage unavailable */
+    }
+  };
   const [capital, setCapital] = useState(100000);
   const [riskPct, setRiskPct] = useState(1);
   const [side, setSide] = useState(setup.side);
@@ -88,7 +126,13 @@ export function TradeCalculator({ setup, onClose, atr, openingRange }: {
     }
   }, [capital, riskPct]);
 
-  const result = useMemo(() => plan({ capital, riskPct, side, entry, stop, target, product }), [capital, riskPct, side, entry, stop, target, product]);
+  const rec = record?.[side];
+  const kellyPct = mode === "kelly" && rec && rec.trades >= 30 ? kellyRiskPct(rec.winLowPct, rec.avgWinPct, rec.avgLossPct) : null;
+  const result = useMemo(
+    () => plan({ capital, riskPct, side, entry, stop, target, product, atr: mode === "volatility" ? atr : null, kellyPct }),
+    [capital, riskPct, side, entry, stop, target, product, mode, atr, kellyPct],
+  );
+  const tooTight = Number.isFinite(entry) && Number.isFinite(stop) && entry > 0 && (Math.abs(entry - stop) / entry) * 100 < MIN_STOP_PCT;
   const shortDelivery = side === "SELL" && product === "delivery";
   const wrongSide = side === "BUY" ? !(stop < entry && target > entry) : !(stop > entry && target < entry);
 
@@ -125,6 +169,31 @@ export function TradeCalculator({ setup, onClose, atr, openingRange }: {
         </div>
       </div>
 
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-muted">Size by</span>
+        <div className="flex rounded-lg border border-line bg-panel-2 p-0.5">
+          {(
+            [
+              ["risk", "Risk at stop", "Risk % of capital if the stop is hit (default)."],
+              ["volatility", "+ Volatility cap", "Also cap the size so one ATR move costs no more than your risk %."],
+              ["kelly", "+ Kelly cap", "Also cap at quarter-Kelly from this chart's past trades, using the low end of their win rate."],
+            ] as const
+          ).map(([m, label, title]) => (
+            <button key={m} title={title} onClick={() => chooseMode(m)}
+              disabled={m === "volatility" ? !atr : m === "kelly" ? !rec : false}
+              className={`rounded-md px-2.5 py-1 font-medium disabled:opacity-40 ${mode === m ? "bg-accent/15 text-accent" : "text-muted"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {mode === "kelly" && rec && rec.trades < 30 && (
+        <p className="-mt-1 mb-2 text-[11px] text-warn">Only {rec.trades} past {side} trades on this chart: too few for Kelly, so it is not applied.</p>
+      )}
+      {mode === "kelly" && kellyPct === 0 && (
+        <p className="-mt-1 mb-2 text-[11px] text-bear">Kelly says skip: even this chart&apos;s best-case record has no edge after costs at the low end of its win rate.</p>
+      )}
+
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         <Num label="Capital" value={capital} onChange={setCapital} step="1000" prefix="₹" />
         <Num label="Risk per trade %" value={riskPct} onChange={setRiskPct} step="0.25" />
@@ -137,6 +206,10 @@ export function TradeCalculator({ setup, onClose, atr, openingRange }: {
         <p className="mt-3 text-xs text-warn">Selling first (short) is only allowed intraday. Switch to Intraday or BUY.</p>
       ) : wrongSide ? (
         <p className="mt-3 text-xs text-warn">For a {side}, the stop must be {side === "BUY" ? "below" : "above"} the entry and the target {side === "BUY" ? "above" : "below"} it.</p>
+      ) : tooTight ? (
+        <p className="mt-3 text-xs text-warn">
+          The stop is within {MIN_STOP_PCT}% of the entry: the spread and normal noise would hit it. Widen it before sizing.
+        </p>
       ) : !result || result.qty === 0 ? (
         <p className="mt-3 text-xs text-warn">The capital or risk is too small for even one share at this stop distance.</p>
       ) : (
@@ -145,7 +218,9 @@ export function TradeCalculator({ setup, onClose, atr, openingRange }: {
             <div className="rounded-lg bg-accent/10 p-3">
               <p className="text-[11px] text-muted">Quantity</p>
               <p className="tabular text-2xl font-bold text-accent">{result.qty.toLocaleString("en-IN")}</p>
-              <p className="text-[10px] text-faint">limited by {result.limitedBy === "risk" ? `your ${riskPct}% risk` : "your capital"}</p>
+              <p className="text-[10px] text-faint" title={Object.entries(result.limits).map(([k, v]) => `${k}: ${v}`).join(" · ")}>
+                limited by {LIMIT_TEXT[result.limitedBy](riskPct)}
+              </p>
             </div>
             <div className="rounded-lg bg-panel-2/70 p-3">
               <p className="text-[11px] text-muted">Money needed</p>
@@ -198,6 +273,7 @@ export function TradeCalculator({ setup, onClose, atr, openingRange }: {
           plan={{
             market: "stocks", symbol: setup.symbol, side, entry, stop, target, dp: 2, qtyLabel: "Qty", intraday: product === "intraday",
             qty: result?.qty ?? 0, lossAtStop: result && result.qty > 0 ? -result.atStop.net : null, atr, openingRange,
+            chandelier: chandelier?.[side] ?? null,
           }}
           onLevels={(s, t) => {
             setStop(s);

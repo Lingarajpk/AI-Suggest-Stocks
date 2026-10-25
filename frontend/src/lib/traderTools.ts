@@ -229,9 +229,10 @@ export function stopChoices(o: {
   setupStop: number;
   atr?: number | null;
   openingRange?: { high: number; low: number; complete: boolean } | null;
+  chandelier?: number | null;
   dp: number;
 }): StopChoice[] {
-  const { side, entry, setupStop, atr, openingRange: or, dp } = o;
+  const { side, entry, setupStop, atr, openingRange: or, chandelier, dp } = o;
   const long = side === "BUY";
   const f = 10 ** dp;
   const away = (v: number) => (long ? Math.floor(v * f) / f : Math.ceil(v * f) / f);
@@ -243,6 +244,7 @@ export function stopChoices(o: {
   out.push({ key: "pct-0.5", label: "0.5%", stop: away(entry * (long ? 0.995 : 1.005)) });
   out.push({ key: "pct-1", label: "1%", stop: away(entry * (long ? 0.99 : 1.01)) });
   if (atr) out.push({ key: "atr-1", label: "1 ATR", stop: away(long ? entry - atr : entry + atr) });
+  if (chandelier) out.push({ key: "chandelier", label: "Chandelier", stop: away(chandelier) });
   // Only stops on the right side of the entry and outside normal noise (0.05% of the price).
   return out.filter((c) => (long ? c.stop < entry : c.stop > entry) && Math.abs(entry - c.stop) / entry >= 0.0005);
 }

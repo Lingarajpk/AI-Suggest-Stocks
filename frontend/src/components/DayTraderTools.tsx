@@ -94,6 +94,7 @@ export interface ToolsPlan {
   intraday: boolean;
   atr?: number | null;
   openingRange?: { high: number; low: number; complete: boolean } | null;
+  chandelier?: number | null;
   dp: number;
 }
 
@@ -103,7 +104,7 @@ export function DayTraderPanel({ plan, onLevels }: { plan: ToolsPlan; onLevels?:
   const [setupStop] = useState(plan.stop);
   if (!tools.enabled) return null;
   const valid = plan.side === "BUY" ? plan.stop < plan.entry && plan.target > plan.entry : plan.stop > plan.entry && plan.target < plan.entry;
-  const choices = stopChoices({ side: plan.side, entry: plan.entry, setupStop, atr: plan.atr, openingRange: plan.openingRange, dp: plan.dp });
+  const choices = stopChoices({ side: plan.side, entry: plan.entry, setupStop, atr: plan.atr, openingRange: plan.openingRange, chandelier: plan.chandelier, dp: plan.dp });
   const risk = Math.abs(plan.entry - plan.stop);
   const curR = risk > 0 ? Math.abs(plan.target - plan.entry) / risk : null;
   return (
