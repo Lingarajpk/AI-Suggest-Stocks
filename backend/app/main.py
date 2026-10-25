@@ -125,6 +125,7 @@ async def lifespan(app: FastAPI):
         log.warning("DATA_MODE=demo: serving SYNTHETIC data, not market data")
         provider = DemoProvider()
     service = MarketService(provider, settings)
+    service.cache = cache
     # Forex: its own service (pairs, session, models, caches) and news, on the same data provider.
     forex = ForexService(provider, settings)
     app.state.forex = forex
@@ -170,12 +171,13 @@ async def lifespan(app: FastAPI):
     warmer = asyncio.create_task(warm()) if settings.warm_up else None
     desk_warmer = asyncio.create_task(service.desk_warmer()) if settings.warm_up else None
     forex_desk_warmer = asyncio.create_task(forex.desk_warmer()) if settings.warm_up else None
+    options_sampler = asyncio.create_task(service.options_sampler()) if settings.warm_up else None
     keeper = asyncio.create_task(auth_keeper(app, http))
     calendar = asyncio.create_task(calendar_keeper(app))
     yield
     if warmer:
         warmer.cancel()
-    for task in (desk_warmer, forex_desk_warmer):
+    for task in (desk_warmer, forex_desk_warmer, options_sampler):
         if task:
             task.cancel()
     keeper.cancel()

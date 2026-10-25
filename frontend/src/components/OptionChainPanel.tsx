@@ -72,6 +72,7 @@ export function OptionChainPanel({ symbol, index = false, market = "stocks" }: {
         <div className="space-y-4">
           <Recommendation data={data} onPick={onPick} />
           <Summary data={data} />
+          <FlowAndTrend data={data} />
           <p className="text-[11px] text-faint">Tap any call or put price to open an order ticket.</p>
           <ChainTable data={data} onPick={onPick} />
           <p className="text-[11px] leading-relaxed text-faint">
@@ -203,6 +204,113 @@ function Summary({ data }: { data: OptionChain }) {
   );
 }
 
+const BUILDUP_TAG: Record<string, { tag: string; cls: string; title: string }> = {
+  long_buildup: { tag: "LB", cls: "text-bull", title: "Long build-up: price up, OI up (fresh buying)" },
+  short_buildup: { tag: "SB", cls: "text-bear", title: "Short build-up: price down, OI up (fresh writing)" },
+  short_covering: { tag: "SC", cls: "text-accent", title: "Short covering: price up, OI down (writers exiting)" },
+  long_unwinding: { tag: "LU", cls: "text-warn", title: "Long unwinding: price down, OI down (buyers exiting)" },
+};
+
+function BuildupTag({ leg }: { leg: OptionLeg | null }) {
+  const b = leg?.buildup ? BUILDUP_TAG[leg.buildup] : null;
+  if (!b) return null;
+  return (
+    <span className={`ml-1 text-[9px] font-bold ${b.cls}`} title={b.title}>
+      {b.tag}
+    </span>
+  );
+}
+
+function MiniLine({ values, label }: { values: number[]; label: string }) {
+  if (values.length < 2) return null;
+  const lo = Math.min(...values), hi = Math.max(...values);
+  const span = hi - lo || 1;
+  const w = 120, h = 28;
+  const xy = values.map((v, i) => `${((i / (values.length - 1)) * w).toFixed(1)},${(h - ((v - lo) / span) * h).toFixed(1)}`).join(" ");
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-7 w-full" preserveAspectRatio="none" role="img" aria-label={label}>
+      <polyline points={xy} fill="none" className="stroke-accent" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+/** Today's OI flow near the money, how PCR and IV have moved since the open, and where IV sits. */
+function FlowAndTrend({ data }: { data: OptionChain }) {
+  const f = data.flow;
+  const t = data.trend ?? [];
+  const iv = data.iv_rank;
+  if (!f && t.length < 2 && !iv) return null;
+  const pcrs = t.map((x) => x.pcr);
+  const ivs = t.map((x) => x.atm_iv).filter((x): x is number => x != null);
+  const delta = (xs: number[]) => (xs.length >= 2 ? xs[xs.length - 1] - xs[0] : null);
+  const dPcr = delta(pcrs), dIv = delta(ivs);
+  const leanCls = (l?: string) => (l === "bullish" ? "text-bull" : l === "bearish" ? "text-bear" : "text-muted");
+  return (
+    <div className="grid gap-3 lg:grid-cols-3">
+      {f && (
+        <div className="rounded-xl border border-line px-3 py-2 lg:col-span-2">
+          <p className="flex items-center justify-between text-xs">
+            <span className="font-semibold text-ink">OI build-up near the money</span>
+            <span className={`font-semibold capitalize ${leanCls(f.lean)}`}>
+              {f.lean} ({f.score > 0 ? "+" : ""}
+              {f.score.toFixed(2)})
+            </span>
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted">{f.text}</p>
+          <ul className="mt-1.5 grid gap-1 text-[11px] sm:grid-cols-2">
+            {f.top.map((m) => (
+              <li key={`${m.strike}-${m.side}`} className="flex justify-between gap-2 rounded-md bg-panel-2 px-2 py-1">
+                <span>
+                  {m.strike.toLocaleString("en-IN")} {m.side} · {m.label}
+                </span>
+                <span className={leanCls(m.lean)}>{signedK(m.oi_change)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="space-y-2 rounded-xl border border-line px-3 py-2 text-xs">
+        {iv && (
+          <p>
+            <span className="text-muted">IV percentile: </span>
+            {iv.percentile != null ? (
+              <b className={iv.percentile >= 70 ? "text-bear" : iv.percentile <= 30 ? "text-bull" : "text-ink"}>{iv.percentile}th</b>
+            ) : (
+              <span className="text-faint">collecting ({iv.days} of 20 days)</span>
+            )}
+            {iv.source === "vix" && <span className="text-faint"> · from India VIX until 20 days of this chain&apos;s IV are saved</span>}
+            {iv.source === "own" && iv.rank != null && <span className="text-faint"> · IV rank {iv.rank} over {iv.days} days</span>}
+            {iv.percentile != null && (
+              <span className="block text-[11px] text-faint">
+                {iv.percentile >= 70 ? "Options are expensive: buyers pay up, theta hurts more." : iv.percentile <= 30 ? "Options are cheap relative to their history." : "Option prices are normal for this underlying."}
+              </span>
+            )}
+          </p>
+        )}
+        {t.length >= 2 ? (
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <p className="text-[10px] text-muted">
+                PCR today {dPcr != null && <span className={dPcr > 0 ? "text-bull" : dPcr < 0 ? "text-bear" : ""}>{dPcr > 0 ? "+" : ""}{dPcr.toFixed(2)}</span>}
+              </p>
+              <MiniLine values={pcrs} label="PCR today" />
+            </div>
+            <div>
+              <p className="text-[10px] text-muted">
+                ATM IV today {dIv != null && <span>{dIv > 0 ? "+" : ""}{dIv.toFixed(1)}</span>}
+              </p>
+              <MiniLine values={ivs} label="ATM IV today" />
+            </div>
+            <p className="col-span-2 text-[10px] text-faint">Since {fmtTime(t[0].time)} · {t.length} readings</p>
+          </div>
+        ) : (
+          <p className="text-[11px] text-faint">PCR and IV trend fill in during market hours (a reading every few minutes).</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ChainTable({ data, onPick }: { data: OptionChain; onPick: OnPick }) {
   const box = useRef<HTMLDivElement>(null);
   const atmRow = useRef<HTMLTableRowElement>(null);
@@ -282,11 +390,17 @@ function Row({ row, spot, maxOi, atm, picked, rowRef, onPick, dp }: {
   return (
     <tr ref={rowRef} className={`border-t border-line/60 ${atm ? "bg-accent/5" : ""}`}>
       <OiCell leg={row.call} maxOi={maxOi} side="call" className={`${callItm ? "bg-warn/5" : ""} ${ring("CE")}`} />
-      <td className={`px-2 py-1 ${chgTone(row.call?.oi_change)} ${callItm ? "bg-warn/5" : ""}`}>{signedK(row.call?.oi_change)}</td>
+      <td className={`px-2 py-1 ${chgTone(row.call?.oi_change)} ${callItm ? "bg-warn/5" : ""}`}>
+        {signedK(row.call?.oi_change)}
+        <BuildupTag leg={row.call} />
+      </td>
       <td className={`px-2 py-1 font-semibold text-ink ${callItm ? "bg-warn/5" : ""} ${ring("CE")}`}>{ltpButton("CE", row.call)}</td>
       <td className={`px-2 py-1 text-center font-semibold ${atm ? "text-accent" : "text-ink"}`}>{row.strike.toLocaleString("en-IN")}</td>
       <td className={`px-2 py-1 text-left font-semibold text-ink ${putItm ? "bg-warn/5" : ""} ${ring("PE")}`}>{ltpButton("PE", row.put)}</td>
-      <td className={`px-2 py-1 text-left ${chgTone(row.put?.oi_change)} ${putItm ? "bg-warn/5" : ""}`}>{signedK(row.put?.oi_change)}</td>
+      <td className={`px-2 py-1 text-left ${chgTone(row.put?.oi_change)} ${putItm ? "bg-warn/5" : ""}`}>
+        {signedK(row.put?.oi_change)}
+        <BuildupTag leg={row.put} />
+      </td>
       <OiCell leg={row.put} maxOi={maxOi} side="put" className={`${putItm ? "bg-warn/5" : ""} ${ring("PE")}`} />
     </tr>
   );

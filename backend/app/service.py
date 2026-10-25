@@ -35,6 +35,8 @@ DESK_FRESH_SECONDS = 20  # the intraday desk is rebuilt in the background once o
 CHART_SESSIONS = 2
 TM_LOOKBACK_DAYS = 90  # ~60 sessions of 5-minute candles for the Time Machine's pool
 CONTEXT_FRESH_SECONDS = 300  # market board
+OPTION_SAMPLE_SECONDS = 300  # index option chains are sampled this often during the session (PCR / IV trend)
+IV_HISTORY_DAYS = 400
 GOLD_ETF = "GOLDBEES"
 OPENING_RANGE_MINUTES = 15
 INDEX_ALIASES = {"NIFTY": "NIFTY50", "NIFTYBANK": "BANKNIFTY"}
@@ -127,6 +129,10 @@ class MarketService:
         self._desk: dict[bool, tuple[float, str, dict]] = {}
         self._desk_locks: dict[bool, asyncio.Lock] = {}
         self._desk_tasks: dict[bool, asyncio.Task] = {}
+        self.cache = None  # set by the app: keeps each symbol's daily ATM IV for the IV percentile
+        # (symbol, expiry) -> today's chain snapshots [{time, pcr, atm_iv, straddle, spot}]
+        self._opt_trend: dict[tuple[str, str], list[dict]] = {}
+        self._iv_saved: dict[str, float] = {}
 
     def _memoized(self, key: tuple, stamp: tuple, fn):
         hit = self._memo.get(key)
@@ -582,7 +588,11 @@ class MarketService:
             log.exception("intraday call failed for %s", inst.symbol)
             card = None
         summary = opt.summarize(rows, spot)
+        trend = self._record_chain(inst.symbol, expiry, summary, spot)
         return {
+            "flow": opt.oi_flow(rows, spot),
+            "trend": trend,
+            "iv_rank": await self._iv_rank(inst, summary.get("atm_iv")),
             "symbol": inst.symbol,
             "instrument": inst.model_dump(),
             "source": self.provider.name,
@@ -596,6 +606,60 @@ class MarketService:
             "index_call": {k: (card or {}).get(k) for k in ("verdict", "reason", "levels", "atr", "since")} if card else None,
             "rows": opt.window(rows, spot),
         }
+
+    def _record_chain(self, symbol: str, expiry: str, summary: dict, spot: float | None) -> list[dict]:
+        """Today's PCR / ATM IV / straddle snapshots for this chain (at most one a minute)."""
+        now = now_ist()
+        key = (symbol, expiry)
+        snaps = [s for s in self._opt_trend.get(key, []) if s["time"][:10] == now.date().isoformat()]
+        if summary.get("pcr") is not None and is_session_open(now, self.hours) and (
+                not snaps or (now - datetime.fromisoformat(snaps[-1]["time"])).total_seconds() >= 60):
+            snaps.append({"time": now.isoformat(), "pcr": summary["pcr"], "atm_iv": summary.get("atm_iv"),
+                          "straddle": summary.get("straddle"), "spot": spot})
+        self._opt_trend[key] = snaps[-200:]
+        return snaps
+
+    async def _iv_rank(self, inst: Instrument, atm_iv: float | None) -> dict | None:
+        """Where today's ATM IV sits in this symbol's own daily history (kept in the cache). Until 20 days are
+        collected, indices fall back to India VIX's percentile, which is NIFTY's 30-day implied volatility."""
+        hist: dict[str, float] = {}
+        if self.cache is not None:
+            hist = await self.cache.get(f"ivhist:{inst.symbol}") or {}
+            now = now_ist()
+            if atm_iv and is_session_open(now, self.hours) and time.monotonic() - self._iv_saved.get(inst.symbol, 0) > 600:
+                hist[now.date().isoformat()] = atm_iv
+                cutoff = (now.date() - timedelta(days=IV_HISTORY_DAYS)).isoformat()
+                hist = {d: v for d, v in hist.items() if d >= cutoff}
+                await self.cache.set(f"ivhist:{inst.symbol}", hist, IV_HISTORY_DAYS * 86400)
+                self._iv_saved[inst.symbol] = time.monotonic()
+        own = opt.iv_percentile(hist, atm_iv)
+        if own:
+            return own
+        if inst.kind == "index":
+            vix_inst = await self.provider.resolve_index(VIX_INDEX)
+            if vix_inst is not None:
+                try:
+                    vix = mk.vix_summary(await self._daily_closes(vix_inst))
+                except ProviderError:
+                    vix = None
+                if vix:
+                    return {"rank": None, "percentile": vix["percentile_1y"], "days": len(hist), "source": "vix",
+                            "vix": vix["level"]}
+        return {"rank": None, "percentile": None, "days": len(hist), "source": "collecting"} if atm_iv else None
+
+    async def options_sampler(self) -> None:
+        """During the session, read each index's nearest option chain every few minutes so the PCR / IV trend
+        and the daily IV history build up even when nobody has the options tab open."""
+        while True:
+            if is_session_open(now_ist(), self.hours):
+                for sym in opt.OPTION_INDICES:
+                    try:
+                        await self.option_chain(sym)
+                    except Exception as exc:
+                        log.info("option sample for %s skipped: %s", sym, exc)
+                await asyncio.sleep(OPTION_SAMPLE_SECONDS)
+            else:
+                await asyncio.sleep(60)
 
     async def time_machine(self, inst: Instrument, side: str, entry: float, stop: float, target: float,
                            until: str | None = None, seed: int = 19, replays: int = 10_000) -> dict:

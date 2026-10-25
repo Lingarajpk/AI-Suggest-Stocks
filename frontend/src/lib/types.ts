@@ -785,6 +785,18 @@ export interface OptionLeg {
   theta: number | null;
   vega: number | null;
   pop: number | null;
+  /** Today's price and OI change read together. */
+  buildup?: "long_buildup" | "short_buildup" | "short_covering" | "long_unwinding" | null;
+}
+
+/** Near-the-money OI change read through each strike's build-up. */
+export interface OiFlow {
+  score: number;
+  lean: "bullish" | "bearish" | "neutral";
+  text: string;
+  strikes: number;
+  breakdown: { side: "CE" | "PE"; buildup: string; label: string; oi_change: number }[];
+  top: { strike: number; side: "CE" | "PE"; buildup: string; label: string; oi_change: number; lean: "bullish" | "bearish" }[];
 }
 
 export interface OptionRow {
@@ -817,6 +829,10 @@ export interface OptionPick {
 }
 
 export interface OptionChain {
+  flow?: OiFlow | null;
+  /** Today's snapshots of this chain (one a minute at most). */
+  trend?: { time: string; pcr: number; atm_iv: number | null; straddle: number | null; spot: number | null }[];
+  iv_rank?: { rank: number | null; percentile: number | null; days: number; source: "own" | "vix" | "collecting"; vix?: number; low?: number; high?: number } | null;
   symbol: string;
   instrument?: Instrument;
   /** Premium step: 0.05 for equity/index options, 0.0025 for currency options. */

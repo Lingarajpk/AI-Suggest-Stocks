@@ -68,3 +68,32 @@ def test_window_centres_on_atm():
     rows, spot = opt.parse_chain(chain())
     w = opt.window(rows, spot, n=2)
     assert [r["strike"] for r in w] == [21900, 21950, 22000, 22050, 22100]
+
+
+def test_buildup_classification_and_flow():
+    from app import options as opt
+
+    assert opt.classify(5, 100) == "long_buildup" and opt.classify(-5, 100) == "short_buildup"
+    assert opt.classify(5, -100) == "short_covering" and opt.classify(-5, -100) == "long_unwinding"
+    assert opt.classify(0, 100) is None and opt.classify(5, None) is None
+
+    def leg(chg_price, chg_oi):
+        return {"buildup": opt.classify(chg_price, chg_oi), "oi_change": chg_oi}
+
+    # Heavy put writing (puts fall, OI up) and call short covering: bullish.
+    rows = [{"strike": 100.0 + i, "call": leg(2, -50), "put": leg(-3, 400)} for i in range(5)]
+    flow = opt.oi_flow(rows, 102.0)
+    assert flow["lean"] == "bullish" and flow["score"] == 1.0 and flow["top"][0]["side"] == "PE"
+    # Call writing dominates: bearish.
+    rows = [{"strike": 100.0 + i, "call": leg(-2, 500), "put": leg(-1, 50)} for i in range(5)]
+    assert opt.oi_flow(rows, 102.0)["lean"] == "bearish"
+    assert opt.oi_flow([{"strike": 100.0, "call": None, "put": None}], 100.0) is None
+
+
+def test_iv_percentile():
+    from app import options as opt
+
+    hist = {f"2026-01-{d:02d}": 10.0 + d for d in range(1, 26)}  # 11 .. 35
+    r = opt.iv_percentile(hist, 23.0)
+    assert r["rank"] == 50 and r["percentile"] == 48 and r["days"] == 25
+    assert opt.iv_percentile({"2026-01-01": 12.0}, 12.0) is None

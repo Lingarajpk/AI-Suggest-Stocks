@@ -27,6 +27,29 @@ def _tick(v: float, tick: float = TICK) -> float:
     return round(round(v / tick) * tick, 4)
 
 
+BUILDUP = {
+    "long_buildup": "Long build-up",  # price up, OI up: fresh buying
+    "short_buildup": "Short build-up",  # price down, OI up: fresh writing/selling
+    "short_covering": "Short covering",  # price up, OI down: sellers exiting
+    "long_unwinding": "Long unwinding",  # price down, OI down: buyers exiting
+}
+# What each build-up says about the underlying, by option side (+1 bullish, -1 bearish).
+FLOW_SIGN = {
+    ("call", "long_buildup"): 1, ("call", "short_covering"): 1, ("call", "short_buildup"): -1, ("call", "long_unwinding"): -1,
+    ("put", "short_buildup"): 1, ("put", "long_unwinding"): 1, ("put", "long_buildup"): -1, ("put", "short_covering"): -1,
+}
+FLOW_STRIKES = 6  # strikes each side of ATM in the flow reading
+
+
+def classify(price_change: float | None, oi_change: float | None) -> str | None:
+    """Long build-up / short build-up / short covering / long unwinding from today's price and OI change."""
+    if not price_change or not oi_change:
+        return None
+    if oi_change > 0:
+        return "long_buildup" if price_change > 0 else "short_buildup"
+    return "short_covering" if price_change > 0 else "long_unwinding"
+
+
 def _side(opt: dict | None) -> dict | None:
     if not opt:
         return None
@@ -49,6 +72,8 @@ def _side(opt: dict | None) -> dict | None:
         "theta": _num(gk.get("theta")),
         "vega": _num(gk.get("vega")),
         "pop": _num(gk.get("pop")),
+        "buildup": classify(round(ltp - close, 4) if ltp is not None and close else None,
+                            oi - prev_oi if oi is not None and prev_oi is not None else None),
     }
 
 
@@ -221,6 +246,57 @@ def recommend(rows: list[dict], spot: float | None, card: dict | None, summary: 
         return {"action": f"BUY {kind}", "reason": reason, "pick": cands.get(kind), "candidates": cands, "against_oi": against}
     why = (card or {}).get("reason") or "No confirmed intraday call yet."
     return {"action": "WAIT", "reason": f"No option buy yet: {why}", "pick": None, "candidates": cands, "against_oi": False}
+
+
+def oi_flow(rows: list[dict], spot: float | None, n: int = FLOW_STRIKES) -> dict | None:
+    """Today's OI change near the money, read through each strike's build-up: call buying and short covering
+    or put writing lean bullish; call writing or put buying lean bearish. Score in [-1, 1] by OI weight."""
+    near = window(rows, spot, n)
+    bull = bear = 0.0
+    totals = {(side, k): 0.0 for side in ("call", "put") for k in BUILDUP}
+    movers = []
+    for r in near:
+        for side in ("call", "put"):
+            leg = r.get(side) or {}
+            b, chg = leg.get("buildup"), leg.get("oi_change")
+            if not b or not chg:
+                continue
+            w = abs(chg)
+            totals[(side, b)] += w
+            if FLOW_SIGN[(side, b)] > 0:
+                bull += w
+            else:
+                bear += w
+            movers.append({"strike": r["strike"], "side": "CE" if side == "call" else "PE", "buildup": b,
+                           "label": BUILDUP[b], "oi_change": chg, "lean": "bullish" if FLOW_SIGN[(side, b)] > 0 else "bearish"})
+    if bull + bear <= 0:
+        return None
+    score = (bull - bear) / (bull + bear)
+    lean = "bullish" if score >= 0.2 else "bearish" if score <= -0.2 else "neutral"
+    movers.sort(key=lambda m: -abs(m["oi_change"]))
+    text = {
+        "bullish": "Near-the-money OI today leans bullish: put writing / call buying outweigh call writing / put buying.",
+        "bearish": "Near-the-money OI today leans bearish: call writing / put buying outweigh put writing / call buying.",
+        "neutral": "Near-the-money OI today is balanced between bullish and bearish build-ups.",
+    }[lean]
+    return {
+        "score": round(score, 2), "lean": lean, "text": text, "strikes": len(near),
+        "breakdown": [{"side": "CE" if side == "call" else "PE", "buildup": k, "label": BUILDUP[k], "oi_change": v}
+                      for (side, k), v in totals.items() if v],
+        "top": movers[:5],
+    }
+
+
+def iv_percentile(history: dict[str, float], current: float | None) -> dict | None:
+    """IV rank (where today sits between the period's low and high) and percentile (share of days below)
+    from a {date: ATM IV} history. Needs 20 days."""
+    vals = [v for _, v in sorted(history.items()) if v]
+    if current is None or len(vals) < 20:
+        return None
+    lo, hi = min(vals), max(vals)
+    return {"rank": round(100 * (current - lo) / (hi - lo)) if hi > lo else 50,
+            "percentile": round(100 * sum(v < current for v in vals) / len(vals)),
+            "days": len(vals), "low": round(lo, 2), "high": round(hi, 2), "source": "own"}
 
 
 def window(rows: list[dict], spot: float | None, n: int = WINDOW) -> list[dict]:
