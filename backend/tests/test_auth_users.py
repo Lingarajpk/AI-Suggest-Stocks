@@ -5,13 +5,13 @@ import pytest
 from app import auth_users
 from app.auth_users import COOKIE, Auth, hash_password, parse_users, verify_password
 
-PW = "Password@123"
+PW = "Test-pass-9x"
 
 
 def test_hash_and_verify():
     h = hash_password(PW, iterations=1000)
     assert h.startswith("pbkdf2_sha256.1000.") and PW not in h
-    assert verify_password(PW, h) and not verify_password("password@123", h)
+    assert verify_password(PW, h) and not verify_password("test-pass-9x", h)
     assert not verify_password(PW, "garbage")
 
 
