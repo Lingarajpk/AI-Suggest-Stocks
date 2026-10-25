@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Calculator, X } from "lucide-react";
+import Link from "next/link";
+import { Calculator, Wallet, X } from "lucide-react";
 import { MIN_STOP_PCT, kellyRiskPct, plan, type Product, type SizeLimit } from "@/lib/charges";
 import { fmtPrice } from "@/lib/format";
+import { placeOrder, useDevice } from "@/lib/paper";
 import type { OpeningRange } from "@/lib/types";
 import { DayTraderPanel } from "./DayTraderTools";
 
@@ -268,6 +270,9 @@ export function TradeCalculator({ setup, onClose, atr, openingRange, record, cha
           </details>
         </>
       )}
+      {!shortDelivery && !wrongSide && !tooTight && result && result.qty > 0 && (
+        <PaperThis symbol={setup.symbol} side={side} qty={result.qty} product={product} stop={stop} target={target} source={setup.source} />
+      )}
       {!shortDelivery && (
         <DayTraderPanel
           plan={{
@@ -282,5 +287,57 @@ export function TradeCalculator({ setup, onClose, atr, openingRange, record, cha
         />
       )}
     </section>
+  );
+}
+
+/** Send this plan to paper trading as a bracket (market entry, stop and target), with the reason for the journal. */
+function PaperThis({ symbol, side, qty, product, stop, target, source }: {
+  symbol: string; side: "BUY" | "SELL"; qty: number; product: Product; stop: number; target: number; source?: string;
+}) {
+  const device = useDevice();
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-accent/40 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent/10">
+        <Wallet className="size-3.5" /> Paper trade this plan
+      </button>
+    );
+  }
+  const go = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await placeOrder(device, { symbol, side, qty, type: "market", product: product === "delivery" ? "delivery" : "intraday", stop, target, note, setup: source ?? null });
+      const o = r.order;
+      setMsg({ ok: o.status !== "rejected", text: o.status === "filled" ? `Filled at ₹${o.fill_price}, with the stop and target attached.` : o.status === "rejected" ? `Rejected: ${o.reason}` : "Placed: it fills at the next quote while the market is open." });
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-3 rounded-lg border border-accent/30 bg-accent/5 p-3 text-xs">
+      <p className="font-semibold text-ink">
+        Paper {side} {qty} {symbol} at market · stop {stop} · target {target} · <span className="capitalize">{product}</span>
+      </p>
+      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why this trade? (kept in your paper journal)"
+        className="mt-2 w-full rounded-md border border-line bg-panel px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <button onClick={go} disabled={busy || note.trim().length < 3 || !device} className="rounded-full bg-accent px-4 py-1.5 font-semibold text-white disabled:opacity-50">
+          {busy ? "Placing…" : "Place paper order"}
+        </button>
+        <button onClick={() => setOpen(false)} className="text-muted">Cancel</button>
+        {msg && (
+          <span className={msg.ok ? "text-bull" : "text-bear"}>
+            {msg.text} {msg.ok && <Link href="/paper" className="underline">Open paper trading</Link>}
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-[10px] text-faint">Fake money only. The server fills it from its own quote; nothing reaches a broker.</p>
+    </div>
   );
 }

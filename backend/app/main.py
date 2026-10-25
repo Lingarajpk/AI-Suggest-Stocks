@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
+from app import paper
 from app.ai.debate import Debate
 from app.ai.nvidia import NvidiaExplainer
 from app.alerts import AlertEngine, TelegramNotifier
@@ -30,6 +31,7 @@ from app.news import NewsService, NewsStore
 from app.providers.base import ProviderError, parse_holidays
 from app.providers.demo import DemoProvider
 from app.providers.upstox import UpstoxAuth, UpstoxProvider
+from app.paper import PaperStore
 from app.service import MarketService
 from app.push import PushSender
 from app.token_store import TokenStore
@@ -148,6 +150,10 @@ async def lifespan(app: FastAPI):
                       settings.vapid_public_key, settings.vapid_private_key.get_secret_value())
     await push.load()
     app.state.watchlists, app.state.push = watchlists, push
+    paper_store = PaperStore(settings.data_dir / "paper", durable)
+    await paper_store.load_all()
+    app.state.paper = paper_store
+    paper_task = asyncio.create_task(paper_runner(app))
     engine.watchlists, engine.push = watchlists, push
     app.state.alerts = engine
     engine.start()
@@ -184,6 +190,7 @@ async def lifespan(app: FastAPI):
             task.cancel()
     keeper.cancel()
     calendar.cancel()
+    paper_task.cancel()
     await news.stop()
     news.store.close()
     await forex_news.stop()
@@ -192,6 +199,41 @@ async def lifespan(app: FastAPI):
     await app.state.hub.stop()
     await cache.close()
     await http.aclose()
+
+
+PAPER_TICK_SECONDS = 3
+
+
+async def paper_runner(app: FastAPI) -> None:
+    """Fill paper orders and run the intraday square-off from the server's own quotes, every few seconds
+    while the market is open."""
+    store: PaperStore = app.state.paper
+    service: MarketService = app.state.service
+    last_save = 0.0
+    while True:
+        try:
+            now = now_ist()
+            active = store.active()
+            if active and is_session_open(now):
+                for sym in {x["symbol"] for _, acc in active for x in acc["orders"] + acc["positions"]}:
+                    await service.instrument(sym)  # makes sure its quote is polled (also after a restart)
+                quotes = await service.refresh_quotes()
+                ltp = {k: q.last_price for k, q in quotes.items() if q.last_price}
+                for device, acc in active:
+                    events = paper.process(acc, ltp, now, True)
+                    paper.snapshot_equity(acc, now)
+                    if events or time.monotonic() - last_save > 60:
+                        await store.save(device)
+                if time.monotonic() - last_save > 60:
+                    last_save = time.monotonic()
+                await asyncio.sleep(PAPER_TICK_SECONDS)
+            else:
+                await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("paper runner: %s", exc)
+            await asyncio.sleep(10)
 
 
 async def calendar_keeper(app: FastAPI) -> None:
@@ -588,6 +630,123 @@ async def movers(request: Request):
         "fast": request.app.state.alerts.fast_movers()[:5],
         "fast_window_minutes": settings.alert_fast_window_minutes,
     }
+
+
+def _paper_view(acc: dict) -> dict:
+    positions = []
+    for p in acc["positions"]:
+        long = p["side"] == "long"
+        unreal = ((p["last"] - p["entry"]) if long else (p["entry"] - p["last"])) * p["qty"]
+        legs = {o["role"]: {"id": o["id"], "trigger": o.get("trigger"), "price": o.get("price"), "trail_pct": o.get("trail_pct")}
+                for o in acc["orders"] if o.get("position") == p["id"] and o["status"] == "open"}
+        positions.append({**{k: v for k, v in p.items() if k not in ("best", "worst")}, "unrealized": round(unreal, 2),
+                          "unrealized_pct": round(100 * unreal / (p["entry"] * p["qty"]), 2), "legs": legs})
+    orders = [o for o in acc["orders"] if o["role"] == "entry"]
+    return {
+        "account": {"capital": acc["capital"], **paper.mark(acc)},
+        "positions": positions,
+        "orders": sorted(orders, key=lambda o: (o["status"] != "open", o["placed"]), reverse=False)[:60],
+        "journal": list(reversed(acc["journal"]))[:200],
+        "stats": paper.journal_stats(acc["journal"]),
+        "equity": acc["equity"],
+        "session": session_state(),
+        "rules": "Paper money only: nothing is sent to a broker. Fills use the server's latest Upstox quote while the market "
+                 "is open (market and stop orders pay estimated slippage; limits never fill worse than the limit). Intraday "
+                 "positions are squared off at 15:15. Charges at Upstox rates. No leverage.",
+    }
+
+
+async def _paper_account(request: Request, device: str) -> dict:
+    try:
+        return await request.app.state.paper.get(device)
+    except paper.PaperError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.get("/api/paper/{device}")
+async def paper_get(request: Request, device: str):
+    return _paper_view(await _paper_account(request, device))
+
+
+@app.post("/api/paper/{device}/orders")
+async def paper_order(request: Request, device: str, body: dict = Body(...)):
+    """Place a paper order. The client never sets the fill price: the server fills from its own quotes."""
+    acc = await _paper_account(request, device)
+    service = svc(request)
+    inst = await service.instrument(str(body.get("symbol") or ""))
+    if inst is None:
+        raise HTTPException(404, "Symbol not found on NSE.")
+    with contextlib.suppress(ProviderError):
+        await service.refresh_quotes()
+    q = service.cached_quote(inst.instrument_key)
+    try:
+        order = paper.validate_order(acc, {**body, "ref_price": q.last_price if q else None})
+    except paper.PaperError as exc:
+        raise HTTPException(400, str(exc)) from None
+    now = now_ist()
+    placed = paper.place(acc, order, inst.symbol, inst.instrument_key, now)
+    if q and q.last_price and is_session_open(now):
+        paper.process(acc, {inst.instrument_key: q.last_price}, now, True)
+    await request.app.state.paper.save(device)
+    return {"order": placed, **_paper_view(acc)}
+
+
+@app.delete("/api/paper/{device}/orders/{order_id}")
+async def paper_cancel(request: Request, device: str, order_id: str):
+    acc = await _paper_account(request, device)
+    try:
+        paper.cancel(acc, order_id)
+    except paper.PaperError as exc:
+        raise HTTPException(400, str(exc)) from None
+    await request.app.state.paper.save(device)
+    return _paper_view(acc)
+
+
+@app.post("/api/paper/{device}/positions/{pos_id}/close")
+async def paper_close(request: Request, device: str, pos_id: str, body: dict = Body(default={})):
+    """Close a position at the server's current quote (plus slippage), while the market is open."""
+    acc = await _paper_account(request, device)
+    pos = next((p for p in acc["positions"] if p["id"] == pos_id), None)
+    if pos is None:
+        raise HTTPException(404, "No such open position.")
+    service = svc(request)
+    with contextlib.suppress(ProviderError):
+        await service.refresh_quotes()
+    q = service.cached_quote(pos["instrument_key"])
+    if not is_session_open(now_ist()) or not q or not q.last_price:
+        raise HTTPException(409, "The market is closed (or there is no live quote): close it during market hours.")
+    slip = paper.SLIPPAGE_PER_SIDE["intraday" if pos["product"] == "intraday" else "delivery"]
+    price = q.last_price * (1 - slip) if pos["side"] == "long" else q.last_price * (1 + slip)
+    paper.close_position(acc, pos_id, price, now_ist(), "manual", str(body.get("note") or ""))
+    await request.app.state.paper.save(device)
+    return _paper_view(acc)
+
+
+@app.patch("/api/paper/{device}/journal/{trade_id}")
+async def paper_journal_note(request: Request, device: str, trade_id: str, body: dict = Body(...)):
+    acc = await _paper_account(request, device)
+    t = next((x for x in acc["journal"] if x["id"] == trade_id), None)
+    if t is None:
+        raise HTTPException(404, "No such trade.")
+    for k in ("exit_note", "lesson"):
+        if k in body:
+            t[k] = " ".join(str(body[k] or "").split())[:500]
+    await request.app.state.paper.save(device)
+    return t
+
+
+@app.post("/api/paper/{device}/reset")
+async def paper_reset(request: Request, device: str, body: dict = Body(default={})):
+    await _paper_account(request, device)
+    try:
+        capital = float(body.get("capital") or paper.DEFAULT_CAPITAL)
+    except (TypeError, ValueError):
+        capital = paper.DEFAULT_CAPITAL
+    if not 10_000 <= capital <= 100_000_000:
+        raise HTTPException(400, "Starting capital must be between ₹10,000 and ₹10 crore.")
+    request.app.state.paper.accounts[device] = paper.new_account(capital)
+    await request.app.state.paper.save(device)
+    return _paper_view(request.app.state.paper.accounts[device])
 
 
 @app.get("/api/strategies/lab")

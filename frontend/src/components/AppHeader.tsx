@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { Activity, Compass, FlaskConical, Globe, LayoutGrid, Moon, Search, Star, Sun, Zap } from "lucide-react";
+import { Activity, Compass, FlaskConical, Globe, LayoutGrid, Moon, Search, Star, Sun, Wallet, Zap } from "lucide-react";
 import { useSearch, type ApiError } from "@/lib/api";
 import { fmtTime } from "@/lib/format";
 import { setTheme, useTheme } from "@/lib/theme";
@@ -23,6 +23,7 @@ const NAV = [
   { href: "/forex", label: "Forex", icon: Globe },
   { href: "/market", label: "Market", icon: Compass },
   { href: "/watchlist", label: "Watchlist", icon: Star },
+  { href: "/paper", label: "Paper", icon: Wallet },
   { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
   { href: "/lab", label: "Strategy lab", icon: FlaskConical, desktopOnly: true },
 ] as const;
@@ -84,7 +85,7 @@ export function AppHeader({
       </header>
       {/* Phone: tab bar at the bottom, like a trading app */}
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-panel/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
-        <div className="grid grid-cols-5">
+        <div className="grid grid-cols-6">
           {NAV.filter((n) => !("desktopOnly" in n)).map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
