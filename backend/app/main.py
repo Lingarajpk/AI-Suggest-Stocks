@@ -33,6 +33,7 @@ from app.providers.demo import DemoProvider
 from app.providers.upstox import UpstoxAuth, UpstoxProvider
 from app.paper import PaperStore
 from app.service import MarketService
+from app.telegram_bot import TelegramBot
 from app.push import PushSender
 from app.token_store import TokenStore
 from app.watchlists import WatchlistStore, clean_symbols, valid_device
@@ -154,6 +155,10 @@ async def lifespan(app: FastAPI):
     await paper_store.load_all()
     app.state.paper = paper_store
     paper_task = asyncio.create_task(paper_runner(app))
+    bot_task = None
+    if settings.telegram_bot_token.get_secret_value() and settings.telegram_chat_id:
+        bot = TelegramBot(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, http, app.state)
+        bot_task = asyncio.create_task(bot.run())
     engine.watchlists, engine.push = watchlists, push
     app.state.alerts = engine
     engine.start()
@@ -191,6 +196,8 @@ async def lifespan(app: FastAPI):
     keeper.cancel()
     calendar.cancel()
     paper_task.cancel()
+    if bot_task:
+        bot_task.cancel()
     await news.stop()
     news.store.close()
     await forex_news.stop()
