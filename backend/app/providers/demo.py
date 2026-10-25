@@ -41,7 +41,9 @@ DEMO_LISTINGS = {
     "INDUSINDBK": "IndusInd Bank", "HINDALCO": "Hindalco", "BRITANNIA": "Britannia", "ZOMATO": "Zomato",
     "IRCTC": "IRCTC", "DMART": "Avenue Supermarts", "PIDILITIND": "Pidilite", "VEDL": "Vedanta",
 }
-INDEX_BASE = {"NIFTY 50": 20000.0, "BANK NIFTY": 45000.0, "SENSEX": 66000.0}
+INDEX_BASE = {"NIFTY 50": 20000.0, "BANK NIFTY": 45000.0, "SENSEX": 66000.0, "INDIA VIX": 14.0, "NIFTY IT": 36000.0,
+              "NIFTY AUTO": 22000.0, "NIFTY PHARMA": 19000.0, "NIFTY FMCG": 55000.0, "NIFTY METAL": 8500.0, "NIFTY ENERGY": 35000.0,
+              "NIFTY REALTY": 900.0, "NIFTY MEDIA": 1900.0, "NIFTY PSU BANK": 6500.0, "NIFTY FIN SERVICE": 21000.0, "NIFTY INFRA": 8000.0}
 
 
 # Synthetic currency futures: starting price and currency name.
@@ -115,6 +117,11 @@ class DemoProvider(MarketDataProvider):
         hits = [(0 if s == q else 1 if s.startswith(q) else 2, s, n) for s, n in DEMO_LISTINGS.items()
                 if q and (q in s or q in n.upper())]
         return [{"symbol": s, "name": f"{n} (demo)", "exchange": "NSE"} for _, s, n in sorted(hits)[:limit]]
+
+    async def resolve_index(self, label: str) -> Instrument | None:
+        if label not in INDEX_BASE:
+            return None
+        return Instrument(symbol=label, name=f"{label} (demo)", exchange="DEMO", segment="DEMO", instrument_key=f"DEMO|{label}", kind="index")
 
     async def resolve_indices(self) -> tuple[list[Instrument], list[str]]:
         return [

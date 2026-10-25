@@ -4,7 +4,7 @@ import { Crosshair } from "lucide-react";
 import { TIMEFRAME_LABEL, edgeVerdict, isIntraday, useStrategyStats, type Market } from "@/lib/api";
 import { fmtPct, fmtTime } from "@/lib/format";
 import { usePx } from "@/lib/priceDigits";
-import type { StrategyBlock, StrategyState, StrategyStatsRow, Timeframe } from "@/lib/types";
+import type { Regime, RegimeBucket, StrategyBlock, StrategyState, StrategyStatsRow, Timeframe } from "@/lib/types";
 import { EvidenceBadge, Panel } from "./ui";
 
 const MIN_SAMPLES = 20;
@@ -18,6 +18,31 @@ const STATE_CLS: Record<StrategyState["state"], string> = {
 const STATE_LABEL: Record<StrategyState["state"], string> = { long: "▲ long", short: "▼ short", none: "—", "n/a": "n/a" };
 
 const TONE = { bull: "text-bull", bear: "text-bear", warn: "text-warn", muted: "text-faint" };
+
+const BUCKET_LABEL: Record<RegimeBucket, string> = {
+  with: "with the trend",
+  against: "against the trend",
+  range: "in ranges",
+  volatile: "in volatile markets",
+  mixed: "in mixed markets",
+};
+
+/** The regime relative to a trade's side, as the backtest groups it. */
+function bucketFor(regime: Regime, side: "long" | "short"): RegimeBucket {
+  if (regime.label === "trend_up" || regime.label === "trend_down") return (regime.label === "trend_up") === (side === "long") ? "with" : "against";
+  return regime.label;
+}
+
+export function RegimeChip({ regime }: { regime?: Regime | null }) {
+  if (!regime) return null;
+  const cls =
+    regime.label === "trend_up" ? "bg-bull/10 text-bull" : regime.label === "trend_down" ? "bg-bear/10 text-bear" : regime.label === "range" ? "bg-accent/10 text-accent" : "bg-warn/10 text-warn";
+  return (
+    <span className={`whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${cls}`} title={regime.text}>
+      {regime.name}
+    </span>
+  );
+}
 
 /** Stock page: what each strategy says right now, with its pooled track record next to it. */
 export function StrategiesPanel({ block, timeframe, market = "stocks" }: { block: StrategyBlock | null | undefined; timeframe: Timeframe; market?: Market }) {
@@ -37,11 +62,28 @@ export function StrategiesPanel({ block, timeframe, market = "stocks" }: { block
         <p className="text-sm text-faint">No strategy data.</p>
       ) : (
         <div className="space-y-4">
+          {block.regime && (
+            <div className="rounded-xl bg-panel-2 px-3 py-2 text-xs">
+              <p className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-ink">Market on this chart:</span> <RegimeChip regime={block.regime} />
+                <span className="text-muted">
+                  {block.regime.higher_tf} trend {block.regime.higher_tf_trend}
+                </span>
+              </p>
+              <p className="mt-0.5 text-muted">{block.regime.text}</p>
+              <p className="mt-0.5 text-faint">
+                Efficiency {block.regime.efficiency} · trend fit R² {block.regime.trend_r2}
+                {block.regime.atr_percentile != null && ` · volatility ${block.regime.atr_percentile}th percentile`}
+              </p>
+            </div>
+          )}
           <ul className="space-y-2">
             {block.strategies.map((s) => {
               const r = pooled.get(s.key);
               const ev = r ? edgeVerdict(r.hit_rate, r.base_rate, r.signals) : null;
               const ls = s.last_signal;
+              const bucket = block.regime && (s.state === "long" || s.state === "short") ? bucketFor(block.regime, s.state) : null;
+              const inRegime = bucket ? r?.by_regime?.[bucket] : undefined;
               return (
                 <li key={s.key} className="border-b border-line/60 pb-2 last:border-0" title={s.description}>
                   <div className="flex items-center justify-between gap-2">
@@ -63,6 +105,13 @@ export function StrategiesPanel({ block, timeframe, market = "stocks" }: { block
                   {ev && r && r.signals > 0 && (
                     <p className={`text-[11px] ${TONE[ev.tone]}`}>
                       All stocks: right {r.hit_rate}% of {r.signals} vs {r.base_rate}% random · {ev.label}
+                    </p>
+                  )}
+                  {bucket && inRegime && (
+                    <p className={`text-[11px] ${inRegime.avg_trade_pct > 0 ? "text-bull" : "text-bear"}`}>
+                      {BUCKET_LABEL[bucket]}: {inRegime.trades} past trades, avg {inRegime.avg_trade_pct > 0 ? "+" : ""}
+                      {inRegime.avg_trade_pct}% after costs, {inRegime.win_rate}% won
+                      {inRegime.trades < 30 && <span className="text-faint"> (few trades)</span>}
                     </p>
                   )}
                 </li>
@@ -187,7 +236,9 @@ function StatsRows({ rows }: { rows: StrategyStatsRow[] }) {
         return (
           <tr key={r.key} className={`border-b border-line/60 ${few ? "text-faint" : ""}`} title={r.description}>
             <td className="py-1 pr-2">
-              {r.name}
+              <span className="inline-flex flex-wrap items-center gap-1">
+                {r.name} <EvidenceBadge evidence={r.evidence} />
+              </span>
               {r.decay?.status === "fading" && (
                 <span className="ml-1 text-[10px] text-warn" title={r.decay.text}>
                   ↓ fading
@@ -214,13 +265,10 @@ function StatsRows({ rows }: { rows: StrategyStatsRow[] }) {
             </td>
             <td className={`tabular py-1 pr-2 text-right ${r.profit_factor != null && r.profit_factor < 1 ? "text-bear" : ""}`}>{r.profit_factor ?? "—"}</td>
             <td
-              className={`tabular py-1 pr-2 text-right ${r.deflated_sharpe != null && r.deflated_sharpe < 0.5 ? "text-faint" : ""}`}
+              className={`tabular py-1 text-right ${r.deflated_sharpe != null && r.deflated_sharpe < 0.5 ? "text-faint" : ""}`}
               title="Chance the edge is real after allowing for every strategy tested (Deflated Sharpe)"
             >
               {r.deflated_sharpe == null ? "—" : `${Math.round(r.deflated_sharpe * 100)}%`}
-            </td>
-            <td className="py-1 text-right">
-              <EvidenceBadge evidence={r.evidence} />
             </td>
           </tr>
         );
@@ -244,10 +292,9 @@ export function StrategyStatsTable({ timeframe, market = "stocks" }: { timeframe
       <th className="py-1.5 pr-2 text-right font-medium">Trades won</th>
       <th className="py-1.5 pr-2 text-right font-medium" title="Average trade after estimated Upstox charges and slippage">Avg trade (net)</th>
       <th className="py-1.5 pr-2 text-right font-medium" title="Profit factor: total gains ÷ total losses after costs (above 1 makes money)">PF</th>
-      <th className="py-1.5 pr-2 text-right font-medium" title="Chance the edge is real after allowing for every strategy tested (Deflated Sharpe)">
+      <th className="py-1.5 text-right font-medium" title="Chance the edge is real after allowing for every strategy tested (Deflated Sharpe)">
         Real?
       </th>
-      <th className="py-1.5 text-right font-medium">Evidence</th>
     </tr>
   );
   return (

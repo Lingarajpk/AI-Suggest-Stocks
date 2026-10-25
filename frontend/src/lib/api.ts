@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import type { CandleData, Health, IntradayDesk, OptionChain, Point, SearchResult, WatchCall, NewsFeed, PatternStatsResult, ScanResult, StockDetail, StockNews, StrategyStatsResult, Timeframe, TodayResult } from "./types";
+import type { CandleData, Health, IntradayDesk, MarketContext, OptionChain, Point, SearchResult, WatchCall, NewsFeed, PatternStatsResult, ScanResult, StockDetail, StockNews, StrategyStatsResult, Timeframe, TodayResult } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -193,6 +193,10 @@ export function useStockNews(symbol: string, market: Market = "stocks") {
 
 export function useNewsFeed(limit = 20) {
   return useSWR<NewsFeed, ApiError>(`/api/news?limit=${limit}`, fetcher, { refreshInterval: 60_000, keepPreviousData: true });
+}
+
+export function useMarketContext() {
+  return useSWR<MarketContext, ApiError>("/api/market/context", fetcher, { refreshInterval: 300_000, keepPreviousData: true });
 }
 
 export function useToday() {

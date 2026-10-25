@@ -35,6 +35,7 @@ import pandas as pd
 
 from app.analysis import candles as cs
 from app.analysis import indicators as ta
+from app.analysis import regime as rg
 from app.analysis import reliability as rl
 from app.analysis import volume_profile as vp
 from app.analysis.history import profit_factor, simulate_trades
@@ -84,6 +85,10 @@ FEATURES: dict[str, str] = {
     "cvd_div": "CVD divergence (est.)",
     "value_area": "Price vs value area",
     "macd_div": "MACD divergence",
+    "htf_trend": "Higher-timeframe trend",
+    "trend_quality": "Trend quality (R²)",
+    "efficiency": "Efficiency ratio",
+    "vol_regime": "Volatility regime (ATR percentile)",
 }
 
 LEVELS = (0.5, 1.0, 1.5)
@@ -382,6 +387,8 @@ def compute(df: pd.DataFrame, ind: pd.DataFrame, timeframe: str) -> dict:
     X["cvd_div"] = cs.decayed(pd.Series(cvd_div, index=idx), DECAY)
     X["value_area"] = vp.value_area_position(df["close"], levels, ind["atr14"])
     X["macd_div"] = cs.decayed(macd_ev["macd_div"], DECAY)
+    reg = rg.series(df, ind)
+    X = pd.concat([X, rg.features(df, ind, reg, intraday)], axis=1)
 
     return {
         "intraday": intraday,
@@ -394,6 +401,7 @@ def compute(df: pd.DataFrame, ind: pd.DataFrame, timeframe: str) -> dict:
         "green": green,
         "candles": cdl,
         "macd_events": macd_ev,
+        "regime": reg,
         "features": X[list(FEATURES)],
     }
 
@@ -466,6 +474,7 @@ def block(df: pd.DataFrame, ind: pd.DataFrame, res: dict, with_series: bool) -> 
         "breakout": {"last_candle": "green" if green else "red", "levels": table,
                      "note": "Share of this stock's past candles of the same colour whose NEXT candle reached each level."},
         "candles": cs.recent(df, res["candles"], bars=60 if with_series else 5),
+        "regime": rg.current(df, res["regime"], res["features"]["htf_trend"], res["intraday"]) if "regime" in res else None,
         "volume_profile": vp.current(df, res["intraday"], res["swings"]),
         "macd": {
             "last_cross": _event(df, res["macd_events"]["macd_cross"]),
@@ -496,7 +505,8 @@ def _event(df: pd.DataFrame, s: pd.Series) -> dict | None:
 
 # ---- backtest -------------------------------------------------------------
 def _empty() -> dict:
-    return {"buy_n": 0, "buy_hit": 0, "sell_n": 0, "sell_hit": 0, "ret": [], "pnl": [], "gross": [], "times": [], "base_up": 0, "base_n": 0}
+    return {"buy_n": 0, "buy_hit": 0, "sell_n": 0, "sell_hit": 0, "ret": [], "pnl": [], "gross": [], "times": [], "regimes": [],
+            "base_up": 0, "base_n": 0}
 
 
 def raw_stats(df: pd.DataFrame, ind: pd.DataFrame, res: dict, horizon: int, cost_pct: float = 0.0) -> dict[str, dict]:
@@ -506,6 +516,8 @@ def raw_stats(df: pd.DataFrame, ind: pd.DataFrame, res: dict, horizon: int, cost
     valid = pd.Series(np.arange(len(df)) >= MIN_BARS, index=df.index)
     base = fwd[valid].dropna()
     base_up, base_n = int((base > 0).sum()), int(len(base))
+    reg = res.get("regime")
+    label_at = dict(zip((t.isoformat() for t in df.index), reg["label"])) if reg is not None else {}
     pairs = dict(res["signals"])
     for k, s in res["candles"].items():
         pairs[f"cdl_{k}"] = (s > 0, s < 0)
@@ -522,6 +534,8 @@ def raw_stats(df: pd.DataFrame, ind: pd.DataFrame, res: dict, horizon: int, cost
         acc["pnl"] = [float(t["pnl_pct"]) for t in trades]
         acc["gross"] = [float(t["gross_pnl_pct"]) for t in trades]
         acc["times"] = [t["exit_time"] for t in trades]
+        acc["regimes"] = [rg.bucket(label_at.get(t["entry_time"]) if isinstance(label_at.get(t["entry_time"]), str) else None, t["side"])
+                          for t in trades]
         out[key] = acc
     return out
 
@@ -537,6 +551,7 @@ def merge_stats(raw: list[dict[str, dict]]) -> dict[str, dict]:
             a["pnl"] += v["pnl"]
             a["gross"] += v.get("gross", v["pnl"])
             a["times"] += v.get("times") or [""] * len(v["pnl"])
+            a["regimes"] += v.get("regimes") or ["mixed"] * len(v["pnl"])
     # Deflated Sharpe: every strategy and candlestick that was backtested counts as one trial.
     trials = sum(1 for a in acc.values() if a["pnl"])
     return {k: finalize(v, trials=trials) for k, v in acc.items()}
@@ -570,7 +585,25 @@ def finalize(a: dict, trials: int = 1) -> dict:
         "deflated_sharpe": rl.deflated_sharpe(pnl, trials),
         "risk": rl.risk_stats(ordered),
         "decay": rl.decay(ordered),
+        "by_regime": by_regime(pnl, a.get("regimes") or []),
     }
+
+
+REGIME_BUCKETS = {"with": "Trend on its side", "against": "Against the trend", "range": "Range-bound", "volatile": "Volatile", "mixed": "Mixed"}
+
+
+def by_regime(pnl: list[float], regimes: list[str]) -> dict[str, dict]:
+    """Trade results split by the market regime at entry (relative to the trade's side)."""
+    if len(regimes) != len(pnl):
+        return {}
+    out = {}
+    for k in REGIME_BUCKETS:
+        xs = [p for p, r in zip(pnl, regimes) if r == k]
+        if xs:
+            out[k] = {"trades": len(xs), "win_rate": round(100 * sum(x > 0 for x in xs) / len(xs), 1),
+                      "avg_trade_pct": round(sum(xs) / len(xs), 2), "profit_factor": profit_factor(xs),
+                      "grade": rl.evidence(xs)["grade"]}
+    return out
 
 
 def rows(merged: dict[str, dict]) -> list[dict]:

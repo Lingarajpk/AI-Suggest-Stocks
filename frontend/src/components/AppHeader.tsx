@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { Activity, Globe, LayoutGrid, Moon, Search, Star, Sun, Zap } from "lucide-react";
+import { Activity, Compass, Globe, LayoutGrid, Moon, Search, Star, Sun, Zap } from "lucide-react";
 import { useSearch, type ApiError } from "@/lib/api";
 import { fmtTime } from "@/lib/format";
 import { setTheme, useTheme } from "@/lib/theme";
@@ -21,6 +21,7 @@ const SESSION_LABEL = {
 const NAV = [
   { href: "/", label: "Intraday", icon: Zap },
   { href: "/forex", label: "Forex", icon: Globe },
+  { href: "/market", label: "Market", icon: Compass },
   { href: "/watchlist", label: "Watchlist", icon: Star },
   { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
 ] as const;
@@ -82,7 +83,7 @@ export function AppHeader({
       </header>
       {/* Phone: tab bar at the bottom, like a trading app */}
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-panel/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
-        <div className="grid grid-cols-4">
+        <div className="grid grid-cols-5">
           {NAV.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}

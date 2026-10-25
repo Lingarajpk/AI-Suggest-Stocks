@@ -96,6 +96,70 @@ export interface Decay {
   text: string;
 }
 
+export type RegimeLabel = "trend_up" | "trend_down" | "range" | "volatile" | "mixed";
+
+/** What kind of market the chart is in (trend / range / volatile), and the next timeframe up. */
+export interface Regime {
+  label: RegimeLabel;
+  name: string;
+  text: string;
+  efficiency: number;
+  vhf: number | null;
+  trend_r2: number;
+  atr_percentile: number | null;
+  higher_tf: "hourly" | "weekly";
+  higher_tf_trend: "up" | "down" | "flat";
+}
+
+/** Trade results split by the regime at entry, relative to the trade's side. */
+export type RegimeBucket = "with" | "against" | "range" | "volatile" | "mixed";
+export interface RegimeStats {
+  trades: number;
+  win_rate: number;
+  avg_trade_pct: number;
+  profit_factor: number | null;
+  grade: Evidence["grade"];
+}
+
+export interface MarketContext {
+  generated_at: string;
+  source: "upstox" | "demo";
+  session: "open" | "closed" | "pre_open";
+  nifty: { level: number | null; returns: Record<string, number | null> };
+  vix: {
+    level: number;
+    change_1d_pct: number | null;
+    change_5d_pct: number | null;
+    percentile_1y: number;
+    state: string;
+    text: string;
+    history: [string, number][];
+  } | null;
+  breadth: {
+    stocks: number;
+    above_20dma_pct: number;
+    above_50dma_pct: number;
+    advancers: number;
+    decliners: number;
+    unchanged: number;
+    new_20d_highs: number;
+    new_20d_lows: number;
+    text: string;
+  } | null;
+  sectors: {
+    sector: string;
+    returns: Record<"1d" | "1w" | "1m" | "3m", number | null>;
+    relative: Record<"1d" | "1w" | "1m" | "3m", number | null>;
+    acceleration: number | null;
+    score: number;
+    quadrant: "leading" | "weakening" | "lagging" | "improving";
+  }[];
+  regime: { verdict: "risk_on" | "defensive" | "mixed"; text: string; votes: { name: string; vote: number; detail: string }[] } | null;
+  expiries: { index: string; next: string; is_today: boolean; days: number }[];
+  fo_ban: { status: "ok" | "unavailable" | "demo"; trade_date: string | null; symbols: string[]; message?: string };
+  method: string;
+}
+
 export interface DataQuality {
   ok: boolean;
   issues: { level: "error" | "warn"; text: string }[];
@@ -161,6 +225,7 @@ export interface MarkerEvent {
 
 export interface StrategyBlock {
   strategies: StrategyState[];
+  regime?: Regime | null;
   breakout: {
     last_candle: "green" | "red";
     levels: { atr_mult: number; up_level: number | null; down_level: number | null; p_up_pct: number | null; p_down_pct: number | null }[];
@@ -208,6 +273,7 @@ export interface StrategyStatsRow {
   deflated_sharpe?: number | null;
   risk?: RiskStats;
   decay?: Decay | null;
+  by_regime?: Partial<Record<RegimeBucket, RegimeStats>>;
 }
 
 export interface StrategyStatsResult {
@@ -506,6 +572,9 @@ export interface IntradayCard {
     base_up_pct: number | null;
   };
   risks: string[];
+  regime?: Regime | null;
+  /** The daily chart's rule score, and whether it agrees with this call's side. */
+  daily?: { score: number; lean: -1 | 0 | 1; agrees: boolean | null } | null;
   position?: Position | null;
   action?: { label: string; tone: "bull" | "bear" | "warn" | "muted"; text: string };
   chart?: {

@@ -9,6 +9,10 @@ from app.models import Candle, Instrument, Quote, Timeframe
 
 # Indices the dashboard asks for. Availability depends on the provider and entitlement.
 DASHBOARD_INDICES = ("NIFTY 50", "BANK NIFTY", "SENSEX")
+# Context-only indices for the market board (not on the dashboard): volatility and the NSE sector indices.
+VIX_INDEX = "INDIA VIX"
+SECTOR_INDICES = ("BANK NIFTY", "NIFTY IT", "NIFTY AUTO", "NIFTY PHARMA", "NIFTY FMCG", "NIFTY METAL", "NIFTY ENERGY",
+                  "NIFTY REALTY", "NIFTY MEDIA", "NIFTY PSU BANK", "NIFTY FIN SERVICE", "NIFTY INFRA")
 
 
 class ProviderError(Exception):
@@ -166,6 +170,11 @@ class MarketDataProvider(ABC):
     async def search(self, query: str, limit: int = 12) -> list[dict]:
         """Equities matching a symbol or company-name query: [{symbol, name, exchange}]."""
         return []
+
+    async def resolve_index(self, label: str) -> Instrument | None:
+        """One index by label (dashboard, VIX_INDEX or a SECTOR_INDICES name); None if unavailable."""
+        found, _ = await self.resolve_indices()
+        return next((i for i in found if i.symbol == label), None)
 
     async def option_contracts(self, instrument: Instrument) -> list[dict]:
         """Option contracts on an index: [{expiry: "YYYY-MM-DD", lot_size}] (one per expiry is enough)."""

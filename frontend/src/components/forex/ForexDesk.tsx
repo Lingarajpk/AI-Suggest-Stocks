@@ -10,6 +10,7 @@ import { buildLiveBar } from "@/lib/liveBar";
 import type { IntradayLeg, IntradayVerdict, Quote } from "@/lib/types";
 import { useQuoteStream } from "@/lib/useQuoteStream";
 import { AppHeader } from "../AppHeader";
+import { CardContext } from "../CardContext";
 import { Disclaimer } from "../Disclaimer";
 import { IntradayChart } from "../IntradayChart";
 import { FreshnessBadge, HowItWorks } from "../ui";
@@ -104,6 +105,7 @@ function PairCard({ card, quote }: { card: ForexCard; quote: Quote | null }) {
       </div>
 
       <p className="mt-3 text-sm text-muted">{card.reason}</p>
+      <CardContext card={card} />
       <div className="mt-3 flex gap-2">
         <Leg leg={card.entry} label="5-min entry" />
         <Leg leg={card.trend} label="15-min trend" />

@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from app import options as opt
 from app.analysis import dataquality as dq
 from app.analysis import indicators as ta
+from app.analysis import market as mk
 from app.analysis import patterns as pt
 from app.analysis import probability as pb
 from app.analysis import strategies as sx
@@ -19,7 +20,7 @@ from app.analysis.signals import evaluate
 from app.config import Settings
 from app.market_session import EQUITY, MarketHours, is_session_open, now_ist, session_state
 from app.models import Instrument, Quote, Timeframe, is_intraday
-from app.providers.base import MarketDataProvider, ProviderError, drop_incomplete, live_bar_start
+from app.providers.base import SECTOR_INDICES, VIX_INDEX, MarketDataProvider, ProviderError, drop_incomplete, live_bar_start
 from app.watchlists import SYMBOL_RE
 
 log = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ RULE_LEVEL = 20
 DESK_FRESH_SECONDS = 20  # the intraday desk is rebuilt in the background once older than this
 CHART_SESSIONS = 2
 TM_LOOKBACK_DAYS = 90  # ~60 sessions of 5-minute candles for the Time Machine's pool
+CONTEXT_FRESH_SECONDS = 300  # market board
+GOLD_ETF = "GOLDBEES"
 OPENING_RANGE_MINUTES = 15
 INDEX_ALIASES = {"NIFTY": "NIFTY50", "NIFTYBANK": "BANKNIFTY"}
 
@@ -459,11 +462,8 @@ class MarketService:
         oscillators = {name: values(name) for name in ("rsi14", "macd", "macd_signal", "macd_hist")}
         return [c.model_dump(mode="json") for c in candles[start:]], series, oscillators
 
-    async def option_chain(self, symbol: str, expiry: str | None = None) -> dict:
-        """Option chain of an index (NIFTY 50 / BANK NIFTY / SENSEX) or F&O stock, with which option to buy now."""
-        inst = await self.instrument(symbol)
-        if not inst or (inst.kind == "index" and inst.symbol not in opt.OPTION_INDICES):
-            raise ProviderError("no_options", f"{symbol} has no option chain", 404)
+    async def _contracts(self, inst: Instrument) -> list[dict]:
+        """Option contracts (expiry, lot size) of an index or stock, cached for 6 hours."""
         key = inst.instrument_key
         hit = self._opt_contracts.get(key)
         if not hit or time.monotonic() - hit[0] > 6 * 3600:
@@ -475,7 +475,92 @@ class MarketService:
                 found = []  # Upstox answers non-F&O stocks with an error: same as no contracts
             hit = (time.monotonic(), found)
             self._opt_contracts[key] = hit
-        contracts = hit[1]
+        return hit[1]
+
+    async def _daily_closes(self, inst: Instrument):
+        import pandas as pd
+
+        candles = drop_incomplete(await self.provider.candles(inst, "1d", include_partial=True), "1d", now_ist(), self.hours)
+        return pd.Series([c.close for c in candles], index=[c.time.date() for c in candles], dtype=float)
+
+    async def market_context(self, usdinr: Instrument | None = None) -> dict:
+        """Market board: India VIX, breadth of the universe, sector rotation vs NIFTY 50, a risk-on/defensive
+        vote, upcoming index expiries and the F&O ban list. Cached for 5 minutes."""
+        from app import nse
+
+        hit = self.__dict__.get("_context")
+        if hit and time.monotonic() - hit[0] < CONTEXT_FRESH_SECONDS:
+            return hit[1]
+        sem = asyncio.Semaphore(4)
+
+        async def closes(inst: Instrument | None):
+            if inst is None:
+                return None
+            try:
+                async with sem:
+                    return await self._daily_closes(inst)
+            except ProviderError as exc:
+                if exc.http_status == 401:
+                    raise
+                return None
+
+        idx, _ = await self.indices()
+        nifty_inst = next((i for i in idx if i.symbol == "NIFTY 50"), None)
+        vix_inst = await self.provider.resolve_index(VIX_INDEX)
+        sector_insts = [await self.provider.resolve_index(s) for s in SECTOR_INDICES]
+        stocks, _ = await self.universe()
+        gold, _ = await self.provider.resolve_equities([GOLD_ETF])
+        jobs = [closes(nifty_inst), closes(vix_inst), closes(gold[0] if gold else None), closes(usdinr)]
+        jobs += [closes(i) for i in sector_insts] + [closes(i) for i in stocks]
+        res = await asyncio.gather(*jobs)
+        nifty, vix_c, gold_c, fx_c = res[:4]
+        sec_c = res[4:4 + len(sector_insts)]
+        stock_c = res[4 + len(sector_insts):]
+
+        vix = mk.vix_summary(vix_c) if vix_c is not None else None
+        brd = mk.breadth({s.symbol: c for s, c in zip(stocks, stock_c) if c is not None})
+        rotation = mk.sector_rotation({s: c for s, c in zip(SECTOR_INDICES, sec_c) if c is not None}, nifty) if nifty is not None else []
+        votes = mk.macro_votes(nifty, vix, brd, gold_c, fx_c) if nifty is not None else None
+
+        expiries = []
+        today = now_ist().date()
+        for inst in idx:
+            if inst.symbol not in opt.OPTION_INDICES:
+                continue
+            up = opt.upcoming_expiries(await self._contracts(inst), today)
+            if up:
+                expiries.append({"index": inst.symbol, "next": up[0], "is_today": up[0] == today.isoformat(),
+                                 "days": (date.fromisoformat(up[0]) - today).days})
+        if self.provider.name == "demo":
+            ban = {"status": "demo", "trade_date": None, "symbols": [], "message": "Not available in demo mode."}
+        else:
+            ban = await nse.fo_ban_list()
+        out = {
+            "generated_at": now_ist().isoformat(),
+            "source": self.provider.name,
+            "session": session_state(hours=self.hours),
+            "nifty": {"level": None if nifty is None or nifty.empty else round(float(nifty.iloc[-1]), 2),
+                      "returns": {k: mk.ret(nifty, n) for k, n in mk.HORIZONS.items()} if nifty is not None else {}},
+            "vix": vix,
+            "breadth": brd,
+            "sectors": rotation,
+            "regime": votes,
+            "expiries": expiries,
+            "fo_ban": ban,
+            "method": "Daily closes of completed sessions. Sector score = average z-score across sectors of relative strength "
+                      "vs NIFTY 50 over 1 week, 1 month, 3 months and the acceleration (1-week daily pace minus 3-month). "
+                      "Breadth is over this app's stock universe, not the whole exchange. Context, not a trade signal.",
+        }
+        self.__dict__["_context"] = (time.monotonic(), out)
+        return out
+
+    async def option_chain(self, symbol: str, expiry: str | None = None) -> dict:
+        """Option chain of an index (NIFTY 50 / BANK NIFTY / SENSEX) or F&O stock, with which option to buy now."""
+        inst = await self.instrument(symbol)
+        if not inst or (inst.kind == "index" and inst.symbol not in opt.OPTION_INDICES):
+            raise ProviderError("no_options", f"{symbol} has no option chain", 404)
+        key = inst.instrument_key
+        contracts = await self._contracts(inst)
         expiries = opt.upcoming_expiries(contracts, now_ist().date())
         if not expiries:
             raise ProviderError("no_options", f"{inst.symbol} has no F&O options (only F&O stocks and the main indices do)", 404)
@@ -546,6 +631,26 @@ class MarketService:
         while len(cache) > 200:  # a few hundred recent plans at most
             cache.pop(next(iter(cache)))
         return out
+
+    async def daily_trend(self, inst: Instrument) -> dict | None:
+        """The daily chart's rule score as context for an intraday call (cached per daily candle)."""
+        try:
+            candles = drop_incomplete(await self.provider.candles(inst, "1d", include_partial=True), "1d", now_ist(), self.hours)
+        except ProviderError as exc:
+            if exc.http_status == 401:
+                raise
+            return None
+        df, ind, stamp = self._frame(inst, "1d", candles)
+        if df.empty:
+            return None
+
+        def work():
+            score = evaluate(df, ind, "1d", now_ist(), None)["score"]
+            if score is None:
+                return None
+            return {"score": score, "lean": 1 if score >= RULE_LEVEL else -1 if score <= -RULE_LEVEL else 0}
+
+        return self._memoized((inst.instrument_key, "1d", "daily_trend"), stamp, work)
 
     async def intraday_card(self, inst: Instrument, with_chart: bool) -> dict:
         """Intraday call for one instrument: 5-minute entry timing confirmed by the 15-minute trend."""
@@ -626,6 +731,8 @@ class MarketService:
                             "skill_pct": test5.get("skill_pct"), "base_up_pct": test5.get("base_up_pct")},
             "risks": sig5.get("risks", []),
             "opening_range": a5.get("opening_range"),
+            "regime": (a5.get("strategies") or {}).get("regime"),
+            "daily": await self._daily_context(inst, verdict),
             "position": position,
             "action": self._action(verdict, position),
         }
@@ -641,6 +748,13 @@ class MarketService:
                 "markers": [m for m in (a5.get("history") or {}).get("markers") or [] if m["time"] >= first],
             }
         return card
+
+    async def _daily_context(self, inst: Instrument, verdict: str) -> dict | None:
+        d = await self.daily_trend(inst)
+        if d is None:
+            return None
+        side = 1 if verdict == "BUY" else -1 if verdict == "SELL" else 0
+        return {**d, "agrees": None if side == 0 or d["lean"] == 0 else d["lean"] == side}
 
     def _follow(self, symbol: str, verdict: str, levels: dict | None, price: float | None, candle: str | None) -> dict | None:
         """Track the latest BUY/SELL call like a trade so the app can say when to get out: target

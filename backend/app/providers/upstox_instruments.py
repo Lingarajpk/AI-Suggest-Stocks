@@ -22,6 +22,18 @@ INDEX_CANDIDATES = {
     "NIFTY 50": ("NSE_INDEX", ("NIFTY 50", "NIFTY")),
     "BANK NIFTY": ("NSE_INDEX", ("NIFTY BANK", "BANKNIFTY", "BANK NIFTY")),
     "SENSEX": ("BSE_INDEX", ("SENSEX", "S&P BSE SENSEX", "BSE SENSEX")),
+    "INDIA VIX": ("NSE_INDEX", ("INDIA VIX", "INDIAVIX")),
+    "NIFTY IT": ("NSE_INDEX", ("NIFTY IT",)),
+    "NIFTY AUTO": ("NSE_INDEX", ("NIFTY AUTO",)),
+    "NIFTY PHARMA": ("NSE_INDEX", ("NIFTY PHARMA",)),
+    "NIFTY FMCG": ("NSE_INDEX", ("NIFTY FMCG",)),
+    "NIFTY METAL": ("NSE_INDEX", ("NIFTY METAL",)),
+    "NIFTY ENERGY": ("NSE_INDEX", ("NIFTY ENERGY",)),
+    "NIFTY REALTY": ("NSE_INDEX", ("NIFTY REALTY",)),
+    "NIFTY MEDIA": ("NSE_INDEX", ("NIFTY MEDIA",)),
+    "NIFTY PSU BANK": ("NSE_INDEX", ("NIFTY PSU BANK",)),
+    "NIFTY FIN SERVICE": ("NSE_INDEX", ("NIFTY FIN SERVICE", "NIFTY FINANCIAL SERVICES", "NIFTY FINSRV25 50")),
+    "NIFTY INFRA": ("NSE_INDEX", ("NIFTY INFRA", "NIFTY INFRASTRUCTURE")),
 }
 
 
@@ -97,6 +109,8 @@ class InstrumentMaster:
         return [{"symbol": sym, "name": name.title(), "exchange": "NSE"} for _, _, sym, name in scored[:limit]]
 
     def find_index(self, label: str) -> dict | None:
+        if label not in INDEX_CANDIDATES:
+            return None
         segment, candidates = INDEX_CANDIDATES[label]
         pool = [r for r in self._records if r.get("segment") == segment]
         for cand in candidates:

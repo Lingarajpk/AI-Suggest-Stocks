@@ -586,6 +586,15 @@ async def movers(request: Request):
     }
 
 
+@app.get("/api/market/context")
+async def market_context(request: Request):
+    """Market board: India VIX, breadth, sector rotation, risk-on/defensive vote, expiries, F&O ban list."""
+    usdinr = None
+    with contextlib.suppress(Exception):  # the rupee vote is optional
+        usdinr = await request.app.state.forex.instrument("USDINR")
+    return await svc(request).market_context(usdinr)
+
+
 @app.get("/api/today")
 async def today(request: Request):
     result = await svc(request).today()

@@ -245,6 +245,14 @@ class UpstoxProvider(MarketDataProvider):
         await self.master.ensure_loaded()
         return self.master.search(query, limit)
 
+    async def resolve_index(self, label: str) -> Instrument | None:
+        await self.master.ensure_loaded()
+        r = self.master.find_index(label)
+        if r is None:
+            return None
+        return Instrument(symbol=label, name=r.get("name") or label, exchange=r.get("exchange") or r["segment"].split("_")[0],
+                          segment=r["segment"], instrument_key=r["instrument_key"], kind="index")
+
     async def resolve_indices(self) -> tuple[list[Instrument], list[str]]:
         await self.master.ensure_loaded()
         resolved, missing = [], []
