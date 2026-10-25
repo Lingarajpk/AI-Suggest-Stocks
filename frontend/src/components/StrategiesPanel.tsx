@@ -83,6 +83,7 @@ export function StrategiesPanel({ block, timeframe, market = "stocks" }: { block
               const ev = r ? edgeVerdict(r.hit_rate, r.base_rate, r.signals) : null;
               const ls = s.last_signal;
               const bucket = block.regime && (s.state === "long" || s.state === "short") ? bucketFor(block.regime, s.state) : null;
+              const meta = block.meta?.[s.key];
               const inRegime = bucket ? r?.by_regime?.[bucket] : undefined;
               return (
                 <li key={s.key} className="border-b border-line/60 pb-2 last:border-0" title={s.description}>
@@ -105,6 +106,12 @@ export function StrategiesPanel({ block, timeframe, market = "stocks" }: { block
                   {ev && r && r.signals > 0 && (
                     <p className={`text-[11px] ${TONE[ev.tone]}`}>
                       All stocks: right {r.hit_rate}% of {r.signals} vs {r.base_rate}% random · {ev.label}
+                    </p>
+                  )}
+                  {meta && (
+                    <p className={`text-[11px] font-medium ${meta.win_pct > meta.base_win_pct + 3 ? "text-bull" : meta.win_pct < meta.base_win_pct - 3 ? "text-bear" : "text-muted"}`}>
+                      Trade filter: {meta.win_pct.toFixed(0)}% chance this {meta.side.toUpperCase()} wins after costs, in today&apos;s conditions
+                      <span className="font-normal text-faint"> (all signals: {meta.base_win_pct.toFixed(0)}%)</span>
                     </p>
                   )}
                   {bucket && inRegime && (

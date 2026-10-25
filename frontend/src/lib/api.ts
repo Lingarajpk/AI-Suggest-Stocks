@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import type { CandleData, Health, IntradayDesk, MarketContext, OptionChain, Point, SearchResult, WatchCall, NewsFeed, PatternStatsResult, ScanResult, StockDetail, StockNews, StrategyStatsResult, Timeframe, TodayResult } from "./types";
+import type { CandleData, Health, IntradayDesk, MarketContext, OptionChain, StrategyLab, Tearsheet, Point, SearchResult, WatchCall, NewsFeed, PatternStatsResult, ScanResult, StockDetail, StockNews, StrategyStatsResult, Timeframe, TodayResult } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -193,6 +193,21 @@ export function useStockNews(symbol: string, market: Market = "stocks") {
 
 export function useNewsFeed(limit = 20) {
   return useSWR<NewsFeed, ApiError>(`/api/news?limit=${limit}`, fetcher, { refreshInterval: 60_000, keepPreviousData: true });
+}
+
+export function useStrategyLab(timeframe: Timeframe) {
+  return useSWR<StrategyLab, ApiError>(`/api/strategies/lab?timeframe=${timeframe}`, fetcher, {
+    refreshInterval: (d) => (d?.meta.status === "training" ? 15_000 : 600_000),
+    keepPreviousData: true,
+  });
+}
+
+export function useTearsheet(timeframe: Timeframe, key: string | null) {
+  return useSWR<{ key: string; name: string; description: string; tearsheet: Tearsheet | null }, ApiError>(
+    key ? `/api/strategies/lab/${key}?timeframe=${timeframe}` : null,
+    fetcher,
+    { keepPreviousData: true },
+  );
 }
 
 export function useMarketContext() {

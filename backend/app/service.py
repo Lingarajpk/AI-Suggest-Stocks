@@ -9,6 +9,8 @@ from app import options as opt
 from app.analysis import dataquality as dq
 from app.analysis import indicators as ta
 from app.analysis import market as mk
+from app.analysis import metalabel as ml
+from app.analysis import tearsheet as ts
 from app.analysis import patterns as pt
 from app.analysis import probability as pb
 from app.analysis import strategies as sx
@@ -113,6 +115,12 @@ class MarketService:
         # (instrument_key, timeframe) -> (last candle time, bar count, strategies result)
         self._strategies: dict[tuple[str, str], tuple[str, int, dict]] = {}
         self._strategy_stats: dict[str, tuple[datetime, dict]] = {}
+        # timeframe -> (per-instrument raw strategy accumulators, instruments tested): the trade lists behind the stats
+        self._strategy_raw: dict[str, tuple[list[dict], int]] = {}
+        # timeframe -> (computed at, meta-labelling model or None)
+        self._meta: dict[str, tuple[datetime, dict | None]] = {}
+        self._meta_lock = asyncio.Lock()
+        self._meta_tasks: dict[str, asyncio.Task] = {}
         self._strategy_lock = asyncio.Lock()
         # Stocks resolved on demand (watchlists can hold any NSE stock): symbol -> instrument
         self._extra: dict[str, Instrument] = {}
@@ -260,10 +268,11 @@ class MarketService:
             h, h_label = HORIZON[timeframe]
 
             def work():
-                return sx.merge_stats([sx.raw_stats(df, ind, res, h, cost_for(timeframe, inst.kind))
-                                       for inst, df, ind, _, res in frames])
+                raw = [sx.raw_stats(df, ind, res, h, cost_for(timeframe, inst.kind)) for inst, df, ind, _, res in frames]
+                return raw, sx.merge_stats(raw)
 
-            merged = await asyncio.to_thread(work)
+            raw, merged = await asyncio.to_thread(work)
+            self._strategy_raw[timeframe] = (raw, len(frames))
             payload = {
                 "timeframe": timeframe,
                 "source": self.provider.name,
@@ -280,6 +289,104 @@ class MarketService:
             }
             self._strategy_stats[timeframe] = (now_ist(), payload)
             return payload
+
+    def _trades_of(self, timeframe: str, key: str) -> tuple[list[str], list[float]]:
+        raw, _ = self._strategy_raw.get(timeframe, ([], 0))
+        times, pnl = [], []
+        for one in raw:
+            acc = one.get(key)
+            if acc and len(acc.get("times") or []) == len(acc["pnl"]):
+                times += acc["times"]
+                pnl += acc["pnl"]
+        return times, pnl
+
+    async def strategy_lab(self, timeframe: Timeframe) -> dict:
+        """Leaderboard of every strategy on this timeframe: pooled, after costs, ranked by how far the record
+        can be trusted (evidence grade), then by Sharpe."""
+        stats = await self.strategy_stats(timeframe)
+        _, n = self._strategy_raw.get(timeframe, ([], 0))
+        labs = self.__dict__.setdefault("_lab", {})
+        hit = labs.get(timeframe)
+        if hit and hit[0] == stats["generated_at"]:
+            rows = hit[1]
+        else:
+            rows = None
+        by_key = {r["key"]: r for r in stats["rows"]}
+        rank = {"proven": 0, "promising": 1, "insufficient": 2, "weak": 3}
+
+        def work():
+            rows = []
+            for key, (name, kind, desc) in sx.CATALOG.items():
+                times, pnl = self._trades_of(timeframe, key)
+                sheet = ts.build(times, pnl, n)
+                r = by_key.get(key, {})
+                rows.append({"key": key, "name": name, "kind": kind, "description": desc,
+                             "evidence": r.get("evidence"), "deflated_sharpe": r.get("deflated_sharpe"), "decay": r.get("decay"),
+                             "hit_rate": r.get("hit_rate"), "edge_pts": r.get("edge_pts"),
+                             "stats": sheet["stats"] if sheet else None,
+                             "spark": [p[1] for p in sheet["equity"][:: max(1, len(sheet["equity"]) // 60)]] if sheet else []})
+            rows.sort(key=lambda x: (rank.get((x["evidence"] or {}).get("grade"), 4),
+                                     -((x["stats"] or {}).get("sharpe") or -99)))
+            return rows
+
+        if rows is None:
+            rows = await asyncio.to_thread(work)
+            labs[timeframe] = (stats["generated_at"], rows)
+        ready, meta = self.meta_model_nowait(timeframe)
+        return {
+            "timeframe": timeframe, "source": self.provider.name, "generated_at": now_ist().isoformat(),
+            "instruments": n, "horizon_label": stats["horizon_label"], "rows": rows,
+            "meta": {"status": "training" if not ready else "ok" if meta else "not_available",
+                     "useful": bool(meta and meta["useful"]), "test": meta["test"] if meta else None},
+            "method": "Each strategy's signals on every instrument, traded with the same rules (stop 1.5 ATR, target 2.5 ATR or "
+                      f"a trend-reversal exit), {self.cost_note}. Ranked by evidence grade, then Sharpe. In-sample.",
+        }
+
+    async def strategy_tearsheet(self, timeframe: Timeframe, key: str) -> dict:
+        if key not in sx.CATALOG:
+            raise ProviderError("unknown_strategy", f"No strategy called {key}", 404)
+        await self.strategy_stats(timeframe)
+        _, n = self._strategy_raw.get(timeframe, ([], 0))
+        times, pnl = self._trades_of(timeframe, key)
+        sheet = await asyncio.to_thread(ts.build, times, pnl, n)
+        name, kind, desc = sx.CATALOG[key]
+        return {"key": key, "name": name, "kind": kind, "description": desc, "timeframe": timeframe,
+                "source": self.provider.name, "generated_at": now_ist().isoformat(), "tearsheet": sheet}
+
+    def meta_model_nowait(self, timeframe: Timeframe) -> tuple[bool, dict | None]:
+        hit = self._meta.get(timeframe)
+        stale = not hit or now_ist() - hit[0] >= timedelta(minutes=30)
+        task = self._meta_tasks.get(timeframe)
+        if stale and (task is None or task.done()):
+            self._meta_tasks[timeframe] = asyncio.create_task(self._meta_quietly(timeframe))
+        return (True, hit[1]) if hit else (False, None)
+
+    async def _meta_quietly(self, timeframe: Timeframe) -> None:
+        try:
+            await self.meta_model(timeframe)
+        except Exception as exc:
+            log.info("meta-label training for %s failed: %s", timeframe, exc)
+
+    async def meta_model(self, timeframe: Timeframe) -> dict | None:
+        """Meta-labelling model: which strategy signals tend to win after costs, given the market at entry."""
+        async with self._meta_lock:
+            hit = self._meta.get(timeframe)
+            if hit and now_ist() - hit[0] < timedelta(minutes=30):
+                return hit[1]
+            frames, _ = await self._universe_frames(timeframe)
+            keys = list(sx.CATALOG)
+
+            def work():
+                rows, names = [], None
+                for inst, df, ind, items, res in frames:
+                    X = pb.features(df, ind, items, res["features"])
+                    names = list(X.columns)
+                    rows += ml.dataset(df, ind, X, res["signals"], keys, cost_for(timeframe, inst.kind))
+                return ml.build(rows, keys, names or []) if names else None
+
+            built = await asyncio.to_thread(work)
+            self._meta[timeframe] = (now_ist(), built)
+            return built
 
     def cached_strategy_stats(self, timeframe: str) -> dict | None:
         hit = self._strategy_stats.get(timeframe)
@@ -438,8 +545,14 @@ class MarketService:
             # Data-quality NO TRADE reasons (not "weak evidence") also block the combined call.
             issues = _data_issues(sig)
             ready, built = self.outlook_model_nowait(timeframe)
+            X_now = pb.features(df, ind, found, strat["features"])
+            meta_ready, meta = self.meta_model_nowait(timeframe)
+            if result["strategies"] is not None and meta_ready and meta:
+                result["strategies"] = {**result["strategies"],
+                                        "meta": ml.score_current(meta, X_now, result["strategies"]["strategies"]),
+                                        "meta_test": {**meta["test"], "useful": meta["useful"]}}
             if ready:
-                result["outlook"] = pb.outlook(built, pb.features(df, ind, found, strat["features"]), timeframe, not issues, issues)
+                result["outlook"] = pb.outlook(built, X_now, timeframe, not issues, issues)
             else:
                 h, h_label = HORIZON[timeframe]
                 result["outlook"] = {"status": "training", "horizon_bars": h, "horizon_label": h_label,

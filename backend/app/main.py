@@ -588,6 +588,18 @@ async def movers(request: Request):
     }
 
 
+@app.get("/api/strategies/lab")
+async def strategy_lab(request: Request, timeframe: Timeframe = Query("1d")):
+    """Strategy leaderboard: every strategy pooled over the universe, after costs, ranked by evidence then Sharpe."""
+    return await svc(request).strategy_lab(timeframe)
+
+
+@app.get("/api/strategies/lab/{key}")
+async def strategy_tearsheet(request: Request, key: str, timeframe: Timeframe = Query("1d")):
+    """One strategy's tearsheet: equity, drawdown, monthly returns, rolling Sharpe, trade distribution."""
+    return await svc(request).strategy_tearsheet(timeframe, key)
+
+
 @app.get("/api/market/context")
 async def market_context(request: Request):
     """Market board: India VIX, breadth, sector rotation, risk-on/defensive vote, expiries, F&O ban list."""

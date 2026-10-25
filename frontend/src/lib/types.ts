@@ -224,9 +224,80 @@ export interface MarkerEvent {
   bars_ago: number;
 }
 
+export interface MetaTest {
+  trades: number;
+  train_trades: number;
+  test_period: [string, string];
+  base_win_pct: number;
+  skill_pct: number;
+  top_half_win_pct: number;
+  top_half_avg_pct: number;
+  all_avg_pct: number;
+  bottom_half_avg_pct: number | null;
+}
+
+export interface TearsheetStats {
+  trades: number;
+  instruments: number;
+  period: [string, string];
+  total_return_pct: number;
+  annual_return_pct: number;
+  sharpe: number | null;
+  sortino: number | null;
+  max_drawdown_pct: number;
+  longest_drawdown_days: number;
+  calmar: number | null;
+  win_rate: number;
+  profit_factor: number | null;
+  expectancy_pct: number;
+  avg_win_pct: number | null;
+  avg_loss_pct: number | null;
+  best_trade_pct: number;
+  worst_trade_pct: number;
+}
+
+export interface Tearsheet {
+  stats: TearsheetStats;
+  equity: [string, number][];
+  drawdown: [string, number][];
+  monthly: { month: string; pct: number }[];
+  yearly: { year: number; pct: number }[];
+  rolling_sharpe: [string, number][];
+  distribution: { from: number; to: number; count: number }[];
+  method: string;
+}
+
+export interface StrategyLabRow {
+  key: StrategyKey;
+  name: string;
+  kind: string;
+  description: string;
+  evidence: Evidence | null;
+  deflated_sharpe: number | null;
+  decay: Decay | null;
+  hit_rate: number | null;
+  edge_pts: number | null;
+  stats: TearsheetStats | null;
+  spark: number[];
+}
+
+export interface StrategyLab {
+  timeframe: Timeframe;
+  source: "upstox" | "demo";
+  generated_at: string;
+  instruments: number;
+  horizon_label: string;
+  rows: StrategyLabRow[];
+  meta: { status: "ok" | "training" | "not_available"; useful: boolean; test: MetaTest | null };
+  method: string;
+}
+
 export interface StrategyBlock {
   strategies: StrategyState[];
   regime?: Regime | null;
+  /** Meta-labelling: chance a fresh signal of each strategy wins after costs, given the market now. */
+  meta?: Record<string, { win_pct: number; base_win_pct: number; side: "buy" | "sell" }>;
+  meta_test?: MetaTest & { useful: boolean };
   breakout: {
     last_candle: "green" | "red";
     levels: { atr_mult: number; up_level: number | null; down_level: number | null; p_up_pct: number | null; p_down_pct: number | null }[];
