@@ -14,8 +14,9 @@ import httpx
 from fastapi import Body, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
+from app.ai.debate import Debate
 from app.ai.nvidia import NvidiaExplainer
 from app.alerts import AlertEngine, TelegramNotifier
 from app.cache import create_cache
@@ -136,6 +137,7 @@ async def lifespan(app: FastAPI):
     app.state.oauth_states = {}
     app.state.token_request_until = 0.0  # epoch seconds while an approval request is outstanding
     app.state.explainer = NvidiaExplainer(settings, http, cache)
+    app.state.debate = Debate(app.state.explainer, cache)
     engine = AlertEngine(service, settings)
     engine.listeners.append(app.state.hub.broadcast_alert)
     if settings.telegram_bot_token.get_secret_value() and settings.telegram_chat_id:
@@ -640,6 +642,32 @@ async def _stock_detail(request: Request, symbol: str, timeframe: Timeframe) -> 
 @app.get("/api/stocks/{symbol}")
 async def stock_detail(request: Request, symbol: str, timeframe: Timeframe = Query("1d")):
     return await _stock_detail(request, symbol, timeframe)
+
+
+@app.post("/api/stocks/{symbol}/debate")
+async def debate_stock(request: Request, symbol: str, timeframe: Timeframe = Query("1d")):
+    """AI debate (bull, bear, judge, risk) on NVIDIA NIM over the app's own computed facts, streamed as events."""
+    import json
+
+    debate: Debate = request.app.state.debate
+    if not debate.configured:
+        raise HTTPException(503, "NVIDIA_API_KEY is not set on the backend.")
+    detail = await _stock_detail(request, symbol, timeframe)
+    context = None
+    with contextlib.suppress(Exception):
+        context = await asyncio.wait_for(svc(request).market_context(), 20)
+
+    async def events():
+        try:
+            async for ev in debate.run(detail, context):
+                yield f"data: {json.dumps(ev, default=str)}\n\n"
+        except ProviderError as exc:
+            yield f"data: {json.dumps({'step': 'error', 'message': exc.message})}\n\n"
+        except Exception as exc:  # keep the stream well-formed
+            log.exception("debate failed for %s", symbol)
+            yield f"data: {json.dumps({'step': 'error', 'message': f'Debate failed: {exc.__class__.__name__}'})}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/api/stocks/{symbol}/explain")

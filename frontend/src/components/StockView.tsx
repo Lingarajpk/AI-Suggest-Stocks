@@ -20,6 +20,7 @@ import { StrategiesPanel, StrategyStatsTable } from "./StrategiesPanel";
 import { TrackRecordPanel } from "./TrackRecord";
 import { PREFS_EVENT, TradeCalculator, loadPrefs, type TrackRecord, type TradeSetup } from "./TradeCalculator";
 import { TradeStatus } from "./TradeStatus";
+import { AiDebate } from "./AiDebate";
 import { Disclaimer } from "./Disclaimer";
 import { CHART_LEGEND, PriceChart, type ChartTrade } from "./PriceChart";
 import { StatusNotices } from "./StatusNotices";
@@ -285,7 +286,7 @@ function CallCard({ data, trade, onCalc, onOptions }: { data: StockDetail; trade
 }
 
 // ---- detail tabs ------------------------------------------------------------
-const TABS = ["Overview", "Options", "Outlook", "Strategies", "Patterns", "News", "Details"] as const;
+const TABS = ["Overview", "Options", "Outlook", "AI debate", "Strategies", "Patterns", "News", "Details"] as const;
 type Tab = (typeof TABS)[number];
 
 export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string; initialTimeframe?: Timeframe }) {
@@ -468,6 +469,10 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
             <OutlookCard outlook={data.model_outlook} timeframe={data.timeframe} />
             <OutlookReliability outlook={data.model_outlook} />
           </div>
+        )}
+
+        {data && tab === "AI debate" && (
+          <AiDebate key={`${symbol}-${timeframe}`} symbol={symbol} timeframe={timeframe} enabled={!!health.data?.nvidia_configured} />
         )}
 
         {data && tab === "Strategies" && (

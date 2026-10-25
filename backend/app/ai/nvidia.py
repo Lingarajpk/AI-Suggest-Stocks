@@ -135,6 +135,23 @@ class NvidiaExplainer:
         if cached:
             return {**cached, "cached": True}
 
+        text = await self.chat(SYSTEM_PROMPT, json.dumps(facts, default=str), max_tokens=600)
+
+        result = {
+            "status": "ok",
+            "text": text,
+            "model": self.model,
+            "generated_at": now_ist().isoformat(),
+            "unverified_numbers": unverified_numbers(text, facts),
+            "cached": False,
+        }
+        await self._cache.set(cache_key, result, 3600)
+        return result
+
+    async def chat(self, system: str, user: str, max_tokens: int = 600, temperature: float = 0.2) -> str:
+        """One rate-limited NIM chat completion; returns the text with any <think> block removed."""
+        if not self.configured:
+            raise ProviderError("nvidia_not_configured", "NVIDIA_API_KEY is not set on the backend.", 503)
         await self._limiter.acquire()
         try:
             resp = await self._http.post(
@@ -142,12 +159,9 @@ class NvidiaExplainer:
                 headers={"Authorization": f"Bearer {self._settings.nvidia_api_key.get_secret_value()}", "Accept": "application/json"},
                 json={
                     "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": json.dumps(facts, default=str)},
-                    ],
-                    "temperature": 0.2,
-                    "max_tokens": 600,
+                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
                     "chat_template_kwargs": {"enable_thinking": False},
                 },
                 timeout=90,
@@ -165,15 +179,5 @@ class NvidiaExplainer:
         text = (resp.json()["choices"][0]["message"].get("content") or "").strip()
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
         if not text:
-            raise ProviderError("nvidia_empty", "NVIDIA returned an empty explanation.")
-
-        result = {
-            "status": "ok",
-            "text": text,
-            "model": self.model,
-            "generated_at": now_ist().isoformat(),
-            "unverified_numbers": unverified_numbers(text, facts),
-            "cached": False,
-        }
-        await self._cache.set(cache_key, result, 3600)
-        return result
+            raise ProviderError("nvidia_empty", "NVIDIA returned an empty answer.")
+        return text
