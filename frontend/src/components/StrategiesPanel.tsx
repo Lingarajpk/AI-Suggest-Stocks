@@ -5,7 +5,7 @@ import { TIMEFRAME_LABEL, edgeVerdict, isIntraday, useStrategyStats, type Market
 import { fmtPct, fmtTime } from "@/lib/format";
 import { usePx } from "@/lib/priceDigits";
 import type { StrategyBlock, StrategyState, StrategyStatsRow, Timeframe } from "@/lib/types";
-import { Panel } from "./ui";
+import { EvidenceBadge, Panel } from "./ui";
 
 const MIN_SAMPLES = 20;
 
@@ -186,7 +186,14 @@ function StatsRows({ rows }: { rows: StrategyStatsRow[] }) {
         const ev = edgeVerdict(r.hit_rate, r.base_rate, r.signals);
         return (
           <tr key={r.key} className={`border-b border-line/60 ${few ? "text-faint" : ""}`} title={r.description}>
-            <td className="py-1 pr-2">{r.name}</td>
+            <td className="py-1 pr-2">
+              {r.name}
+              {r.decay?.status === "fading" && (
+                <span className="ml-1 text-[10px] text-warn" title={r.decay.text}>
+                  ↓ fading
+                </span>
+              )}
+            </td>
             <td className="tabular py-1 pr-2 text-right">
               {r.signals}
               <span className="text-faint">
@@ -194,7 +201,9 @@ function StatsRows({ rows }: { rows: StrategyStatsRow[] }) {
                 ({r.buy_signals}▲ {r.sell_signals}▼)
               </span>
             </td>
-            <td className="tabular py-1 pr-2 text-right">{r.hit_rate == null ? "—" : `${r.hit_rate}%`}</td>
+            <td className="tabular py-1 pr-2 text-right" title={r.hit_rate_low != null ? `95% range ${r.hit_rate_low}–${r.hit_rate_high}%` : undefined}>
+              {r.hit_rate == null ? "—" : `${r.hit_rate}%`}
+            </td>
             <td className="tabular py-1 pr-2 text-right">{r.base_rate == null ? "—" : `${r.base_rate}%`}</td>
             <td className={`py-1 pr-2 text-right ${few ? "" : TONE[ev.tone]}`}>
               {r.edge_pts == null ? "—" : `${r.edge_pts > 0 ? "+" : ""}${r.edge_pts} pts`}
@@ -203,7 +212,16 @@ function StatsRows({ rows }: { rows: StrategyStatsRow[] }) {
             <td className={`tabular py-1 pr-2 text-right ${(r.avg_trade_pct ?? 0) < 0 ? "text-bear" : ""}`} title={`before costs ${fmtPct(r.gross_avg_trade_pct)}`}>
               {fmtPct(r.avg_trade_pct)}
             </td>
-            <td className={`tabular py-1 text-right ${r.profit_factor != null && r.profit_factor < 1 ? "text-bear" : ""}`}>{r.profit_factor ?? "—"}</td>
+            <td className={`tabular py-1 pr-2 text-right ${r.profit_factor != null && r.profit_factor < 1 ? "text-bear" : ""}`}>{r.profit_factor ?? "—"}</td>
+            <td
+              className={`tabular py-1 pr-2 text-right ${r.deflated_sharpe != null && r.deflated_sharpe < 0.5 ? "text-faint" : ""}`}
+              title="Chance the edge is real after allowing for every strategy tested (Deflated Sharpe)"
+            >
+              {r.deflated_sharpe == null ? "—" : `${Math.round(r.deflated_sharpe * 100)}%`}
+            </td>
+            <td className="py-1 text-right">
+              <EvidenceBadge evidence={r.evidence} />
+            </td>
           </tr>
         );
       })}
@@ -225,7 +243,11 @@ export function StrategyStatsTable({ timeframe, market = "stocks" }: { timeframe
       <th className="py-1.5 pr-2 text-right font-medium">Edge</th>
       <th className="py-1.5 pr-2 text-right font-medium">Trades won</th>
       <th className="py-1.5 pr-2 text-right font-medium" title="Average trade after estimated Upstox charges and slippage">Avg trade (net)</th>
-      <th className="py-1.5 text-right font-medium" title="Profit factor: total gains ÷ total losses after costs (above 1 makes money)">PF</th>
+      <th className="py-1.5 pr-2 text-right font-medium" title="Profit factor: total gains ÷ total losses after costs (above 1 makes money)">PF</th>
+      <th className="py-1.5 pr-2 text-right font-medium" title="Chance the edge is real after allowing for every strategy tested (Deflated Sharpe)">
+        Real?
+      </th>
+      <th className="py-1.5 text-right font-medium">Evidence</th>
     </tr>
   );
   return (
@@ -247,7 +269,7 @@ export function StrategyStatsTable({ timeframe, market = "stocks" }: { timeframe
         <p className="text-sm text-faint">Backtesting every strategy on every stock… (first run takes a few seconds)</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[680px] text-xs">
+          <table className="w-full min-w-[820px] text-xs">
             <thead>{head("Strategy")}</thead>
             <tbody>
               <StatsRows rows={strategies} />
@@ -259,6 +281,8 @@ export function StrategyStatsTable({ timeframe, market = "stocks" }: { timeframe
           </table>
           <p className="mt-2 text-[11px] text-faint">
             {data?.method} Edge = right − random, in percentage points. Greyed rows have fewer than {MIN_SAMPLES} signals — too few to trust.
+            Real? = Deflated Sharpe: the chance the trade edge is not just luck, given that {strategies.length + candles.length} setups were
+            tested. Evidence: Proven = even the low end of the 95% win-rate range beats break-even over 30+ trades.
             {data?.source === "demo" && " Demo mode: these numbers come from synthetic prices, not the market."}
           </p>
         </div>

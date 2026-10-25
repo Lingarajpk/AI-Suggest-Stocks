@@ -20,7 +20,7 @@ import { PriceChart, type ChartTrade } from "../PriceChart";
 import { LayersMenu, useLayers } from "../StockView";
 import { StrategiesPanel, StrategyStatsTable } from "../StrategiesPanel";
 import { TradeStatus } from "../TradeStatus";
-import { FreshnessBadge, HowItWorks, SignalBadge } from "../ui";
+import { DataQualityNote, FreshnessBadge, HowItWorks, SignalBadge } from "../ui";
 import { FX_SESSION_NOTE } from "./ForexDesk";
 import { ForexCalculator, type FxSetup } from "./ForexCalculator";
 
@@ -294,6 +294,7 @@ export function ForexPairView({ pair, initialTimeframe = "15m" }: { pair: string
               <ForexCalculator key={`fx-${sym}-${data.timeframe}-${setup.side}`} setup={setup} atr={data.snapshot.atr14} openingRange={data.opening_range} />
             )}
             <div className="space-y-5">
+              <DataQualityNote quality={data.data_quality} />
               {data.history && <TradeStatus history={data.history} quote={quote} timeframe={data.timeframe} />}
               {data.costs && (
                 <div className="rounded-2xl border border-line bg-panel p-4 text-sm text-muted">

@@ -16,6 +16,13 @@ probability, candlesticks, CVD divergence, value area, MACD divergence) must ear
 inside the training period, the newest 20% is held out for validation and features are added one
 at a time (greedy forward selection) only while each improves the validation Brier score. The
 30% test period is never used for this choice.
+
+Reliability checks on top (none of them can flip a model that failed the test into a call):
+  calibration   Platt scaling fitted on the validation slice, so "60%" means about 60%. It is kept only if it
+                lowers the Brier score on the unseen test period; otherwise the raw probabilities are used.
+  walk-forward  The same features refit on expanding windows and tested on the next block, four times, each
+                with a purge gap of `horizon` bars. A model that only worked in one period shows up here.
+  grade         A: skilful on the test and in at least 3 of 4 walk-forward blocks; B: 2 of 4; C: fewer.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ TRAIN_FRACTION = 0.7
 VALID_FRACTION = 0.2  # newest share of the training period used to choose the extra features
 MIN_GAIN = 0.0005  # validation Brier improvement an extra feature must bring
 RIDGE = 1.0
+WF_CUTS = (0.5, 0.625, 0.75, 0.875)  # walk-forward: train on everything before each cut, test up to the next
 
 FEATURES: dict[str, str] = {
     "trend": "Trend (EMA stack)",
@@ -122,8 +130,16 @@ class Model:
         Z = (X - self.mean) / self.std
         return np.column_stack([np.ones(len(Z)), Z])
 
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    platt: tuple[float, float] | None = None  # (a, b): p = sigmoid(a * logit + b)
+
+    def raw(self, X: np.ndarray) -> np.ndarray:
         return 1 / (1 + np.exp(-np.clip(self.design(X) @ self.w, -30, 30)))
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        if self.platt is None:
+            return self.raw(X)
+        a, b = self.platt
+        return 1 / (1 + np.exp(-np.clip(a * (self.design(X) @ self.w) + b, -30, 30)))
 
     def contributions(self, x: np.ndarray) -> np.ndarray:
         """Each feature's push on the log-odds relative to an average bar."""
@@ -137,6 +153,54 @@ def train(X: np.ndarray, y: np.ndarray) -> Model:
     m = Model(np.zeros(X.shape[1] + 1), mean, std)
     m.w = fit_logistic(m.design(X), y)
     return m
+
+
+def fit_platt(p: np.ndarray, y: np.ndarray) -> tuple[float, float] | None:
+    """1-D logistic fit of outcomes on the model's log-odds (Platt scaling). None if degenerate."""
+    if len(y) < 50 or y.min() == y.max():
+        return None
+    z = np.log(np.clip(p, 1e-6, 1 - 1e-6) / np.clip(1 - p, 1e-6, 1))
+    w = fit_logistic(np.column_stack([np.ones(len(z)), z]), y, ridge=1e-3)
+    b, a = float(w[0]), float(w[1])
+    return (a, b) if a > 0 else None  # a negative slope would invert the model: refuse
+
+
+def walk_forward(data: pd.DataFrame, cols: list[str], horizon: int) -> list[dict]:
+    """Refit on expanding windows; test each on the next block (after a purge gap)."""
+    times = data.index
+    out = []
+    for k, f in enumerate(WF_CUTS):
+        lo = times[int(len(times) * f)]
+        hi = times[int(len(times) * WF_CUTS[k + 1])] if k + 1 < len(WF_CUTS) else None
+        tr = data[times < lo]
+        te = data[(times >= lo) & ((times < hi) if hi is not None else True)]
+        te_times = te.index.unique().sort_values()
+        if len(te_times) > horizon:
+            te = te[te.index >= te_times[horizon]]
+        if len(tr) < 100 or len(te) < 50:
+            continue
+        m = train(tr[cols].to_numpy(float), tr["_y"].to_numpy(float))
+        y = te["_y"].to_numpy(float)
+        p = m.predict(te[cols].to_numpy(float))
+        b = float(np.mean((p - y) ** 2))
+        b0 = float(np.mean((float(tr["_y"].mean()) - y) ** 2))
+        out.append({"from": te.index.min().isoformat(), "to": te.index.max().isoformat(), "samples": int(len(te)),
+                    "skill_pct": round(100 * (1 - b / b0), 2) if b0 > 0 else 0.0,
+                    "accuracy_pct": round(100 * float(((p >= 0.5) == (y == 1)).mean()), 1)})
+    return out
+
+
+def grade(test_skill: float, folds: list[dict]) -> dict:
+    good = sum(f["skill_pct"] > 0 for f in folds)
+    if test_skill <= 0:
+        g, text = "none", "No skill on unseen data."
+    elif len(folds) >= 4 and good >= 3:
+        g, text = "A", f"Beat guessing on the test period and in {good} of {len(folds)} walk-forward periods."
+    elif good >= 2:
+        g, text = "B", f"Beat guessing on the test period but only in {good} of {len(folds)} walk-forward periods."
+    else:
+        g, text = "C", f"Beat guessing on the test period, but in only {good} of {len(folds)} walk-forward periods: treat with caution."
+    return {"grade": g, "text": text, "positive_periods": good, "periods": len(folds)}
 
 
 def evaluate(p: np.ndarray, y: np.ndarray, base: float) -> dict:
@@ -189,8 +253,27 @@ def build(datasets: list[tuple[pd.DataFrame, pd.Series]], horizon: int) -> dict 
     candidates = [c for c in EXTRA if c in data.columns]
     cols, selection = select_features(train_d, candidates, horizon)
     m_oos = train(train_d[cols].to_numpy(float), train_d["_y"].to_numpy(float))
-    p_test = m_oos.predict(test_d[cols].to_numpy(float))
-    oos = evaluate(p_test, test_d["_y"].to_numpy(float), float(train_d["_y"].mean()))
+    y_test = test_d["_y"].to_numpy(float)
+    p_raw = m_oos.predict(test_d[cols].to_numpy(float))
+    # Platt scaling from the validation slice of the training period (a model fitted without it).
+    fit_d, val_d = _split(train_d, 1 - VALID_FRACTION, horizon)
+    platt = None
+    if len(fit_d) >= 100 and len(val_d) >= 50:
+        m_fit = train(fit_d[cols].to_numpy(float), fit_d["_y"].to_numpy(float))
+        platt = fit_platt(m_fit.predict(val_d[cols].to_numpy(float)), val_d["_y"].to_numpy(float))
+    calibrated = False
+    p_test = p_raw
+    brier_raw = float(np.mean((p_raw - y_test) ** 2))
+    if platt is not None:
+        m_oos.platt = platt
+        p_cal = m_oos.predict(test_d[cols].to_numpy(float))
+        if float(np.mean((p_cal - y_test) ** 2)) < brier_raw:  # keep it only if it helps on unseen data
+            p_test, calibrated = p_cal, True
+    oos = evaluate(p_test, y_test, float(train_d["_y"].mean()))
+    oos["calibrated"] = calibrated
+    oos["brier_uncalibrated"] = round(brier_raw, 4)
+    oos["walk_forward"] = walk_forward(data, cols, horizon)
+    oos["grade"] = grade(oos["skill_pct"], oos["walk_forward"])
     oos["train_samples"] = int(len(train_d))
     oos["train_period"] = [train_d.index.min().isoformat(), train_d.index.max().isoformat()]
     oos["test_period"] = [test_d.index.min().isoformat(), test_d.index.max().isoformat()]
@@ -199,6 +282,8 @@ def build(datasets: list[tuple[pd.DataFrame, pd.Series]], horizon: int) -> dict 
     oos["features_dropped"] = [LABELS[c] for c in candidates if c not in cols]
     final = train(data[cols].to_numpy(float), data["_y"].to_numpy(float))
     final.cols = cols
+    if calibrated:
+        final.platt = platt
     return {"model": final, "test": oos, "features": cols}
 
 
@@ -288,6 +373,8 @@ def outlook(built: dict | None, X: pd.DataFrame, timeframe: str, data_ok: bool, 
         "test": test,
         "method": "Logistic regression on all strategy signals, trained on the older 70% of pooled history of every "
                   "stock and tested on the newest 30%; extra strategy features are kept only if they improved a "
-                  "validation slice of the training period. Refit on all data for today's estimate. Before costs.",
+                  "validation slice of the training period. Refit on all data for today's estimate. "
+                  + ("Probabilities are calibrated (Platt scaling), which lowered the error on unseen data. " if test.get("calibrated") else "")
+                  + "Checked again on four walk-forward periods. Before costs.",
         "message": f"{100 * p_up:.0f}% chance the close is higher in {h_label} ({verdict}).",
     }

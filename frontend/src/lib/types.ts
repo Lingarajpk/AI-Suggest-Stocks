@@ -69,7 +69,42 @@ export interface Signal {
 
 export type Snapshot = Record<string, number | null>;
 
+/** How far a backtest's track record can be trusted (Wilson interval vs break-even, minimum sample). */
+export interface Evidence {
+  grade: "proven" | "promising" | "weak" | "insufficient";
+  text: string;
+  win_rate_low: number | null;
+  win_rate_high: number | null;
+  breakeven_win_rate: number | null;
+  min_trades: number;
+}
+
+export interface RiskStats {
+  sortino: number | null;
+  ulcer_index: number | null;
+  tail_ratio: number | null;
+  cvar95_pct: number | null;
+  skew: number | null;
+  kurtosis: number | null;
+}
+
+export interface Decay {
+  status: "holding" | "fading" | "improving";
+  recent_avg_pct: number;
+  older_avg_pct: number;
+  window: number;
+  text: string;
+}
+
+export interface DataQuality {
+  ok: boolean;
+  issues: { level: "error" | "warn"; text: string }[];
+  checked_bars: number;
+  as_of: string | null;
+}
+
 export interface Analysis {
+  data_quality?: DataQuality;
   signal: Signal;
   snapshot: Snapshot;
   last_close?: number;
@@ -166,6 +201,13 @@ export interface StrategyStatsRow {
   avg_trade_pct: number | null;
   gross_avg_trade_pct: number | null;
   profit_factor: number | null;
+  hit_rate_low?: number | null;
+  hit_rate_high?: number | null;
+  evidence?: Evidence;
+  /** Probability the Sharpe is truly positive after allowing for every strategy tested (0-1). */
+  deflated_sharpe?: number | null;
+  risk?: RiskStats;
+  decay?: Decay | null;
 }
 
 export interface StrategyStatsResult {
@@ -233,6 +275,9 @@ export interface PatternStats {
   profit_factor: number | null;
   volume_confirmed_n: number;
   volume_confirmed_success_rate: number | null;
+  success_rate_low?: number | null;
+  success_rate_high?: number | null;
+  evidence?: Evidence;
 }
 
 export interface PatternBlock {
@@ -366,6 +411,10 @@ export interface OutlookTest {
   features_used?: string[];
   features_added?: { feature: string; brier_gain: number }[];
   features_dropped?: string[];
+  calibrated?: boolean;
+  brier_uncalibrated?: number;
+  walk_forward?: { from: string; to: string; samples: number; skill_pct: number; accuracy_pct: number }[];
+  grade?: { grade: "A" | "B" | "C" | "none"; text: string; positive_periods: number; periods: number };
 }
 
 export interface Outlook {
@@ -563,6 +612,12 @@ export interface TradeStats {
   sqn: number | null;
   /** [exit time, compounded equity % from the start] after each trade. */
   equity: [string, number][];
+  evidence?: Evidence;
+  risk?: RiskStats;
+  decay?: Decay | null;
+  /** Average best / worst move while trades were open (% of entry). */
+  avg_mfe_pct?: number | null;
+  avg_mae_pct?: number | null;
 }
 
 interface TradeBase {

@@ -104,3 +104,36 @@ export function SkeletonRows({ rows = 6 }: { rows?: number }) {
     </div>
   );
 }
+
+const EVIDENCE: Record<string, { label: string; cls: string }> = {
+  proven: { label: "Proven", cls: "bg-bull/10 text-bull ring-bull/30" },
+  promising: { label: "Promising", cls: "bg-accent/10 text-accent ring-accent/30" },
+  weak: { label: "Weak", cls: "bg-bear/10 text-bear ring-bear/30" },
+  insufficient: { label: "Too few trades", cls: "bg-muted/10 text-muted ring-line" },
+};
+
+/** How far a backtest can be trusted: Wilson lower bound of the win rate vs break-even, and sample size. */
+export function EvidenceBadge({ evidence }: { evidence?: { grade: string; text: string } | null }) {
+  if (!evidence) return null;
+  const e = EVIDENCE[evidence.grade] ?? EVIDENCE.insufficient;
+  return (
+    <span title={evidence.text} className={`whitespace-nowrap rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1 ${e.cls}`}>
+      {e.label}
+    </span>
+  );
+}
+
+/** Data problems found in the candles (missing bars, broken prices, unadjusted splits). */
+export function DataQualityNote({ quality }: { quality?: { ok: boolean; issues: { level: string; text: string }[] } | null }) {
+  if (!quality || !quality.issues.length) return null;
+  return (
+    <div className={`rounded-xl px-3 py-2 text-xs ${quality.ok ? "bg-warn/10 text-warn" : "bg-bear/10 text-bear"}`}>
+      <p className="font-semibold">{quality.ok ? "Data warning" : "Data problem: no call until it clears"}</p>
+      <ul className="mt-0.5 list-disc pl-4">
+        {quality.issues.map((i) => (
+          <li key={i.text}>{i.text}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}

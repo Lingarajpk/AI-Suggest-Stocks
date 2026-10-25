@@ -6,7 +6,7 @@ import { TIMEFRAME_LABEL, usePatternStats, type Market } from "@/lib/api";
 import { fmtDate, fmtPct } from "@/lib/format";
 import { usePx } from "@/lib/priceDigits";
 import type { PatternBlock, PatternInstance, PatternStats, PatternStatsRow, Quote, ScanRow, Timeframe } from "@/lib/types";
-import { Panel } from "./ui";
+import { EvidenceBadge, Panel } from "./ui";
 
 const MIN_SAMPLES = 20;
 
@@ -221,6 +221,7 @@ export function PatternStatsTable({ timeframe, market = "stocks" }: { timeframe:
                 <th className="py-1.5 text-right font-medium" title="Breakouts on above-average volume only">
                   Vol-confirmed hit
                 </th>
+                <th className="py-1.5 text-right font-medium">Evidence</th>
               </tr>
             </thead>
             <tbody>
@@ -235,14 +236,19 @@ export function PatternStatsTable({ timeframe, market = "stocks" }: { timeframe:
                       <Stars n={r.stars} />
                     </td>
                     <td className="tabular py-1 pr-2 text-right">{r.resolved}</td>
-                    <td className="tabular py-1 pr-2 text-right">{r.success_rate == null ? "—" : `${r.success_rate}%`}</td>
+                    <td className="tabular py-1 pr-2 text-right" title={r.success_rate_low != null ? `95% range ${r.success_rate_low}–${r.success_rate_high}%` : undefined}>
+                      {r.success_rate == null ? "—" : `${r.success_rate}%`}
+                    </td>
                     <td className="tabular py-1 pr-2 text-right">{r.profitable_rate == null ? "—" : `${r.profitable_rate}%`}</td>
                     <td className={`tabular py-1 pr-2 text-right ${(r.avg_pnl_pct ?? 0) >= 0 ? "" : "text-bear"}`} title={`before costs ${fmtPct(r.gross_avg_pnl_pct)}`}>
                       {fmtPct(r.avg_pnl_pct)}
                     </td>
                     <td className={`tabular py-1 pr-2 text-right ${r.profit_factor != null && r.profit_factor < 1 ? "text-bear" : ""}`}>{r.profit_factor ?? "—"}</td>
-                    <td className="tabular py-1 text-right">
+                    <td className="tabular py-1 pr-2 text-right">
                       {r.volume_confirmed_success_rate == null ? "—" : `${r.volume_confirmed_success_rate}% (${r.volume_confirmed_n})`}
+                    </td>
+                    <td className="py-1 text-right">
+                      <EvidenceBadge evidence={r.evidence} />
                     </td>
                   </tr>
                 );

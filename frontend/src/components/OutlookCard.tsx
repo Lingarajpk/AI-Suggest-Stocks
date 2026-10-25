@@ -101,6 +101,12 @@ export function OutlookCard({ outlook, timeframe }: { outlook: Outlook | undefin
           </>
         )}
         Price simply rose {t.base_up_pct}% of the time. Skill vs. guessing: <b className={t.skill_pct > 0 ? "text-bull" : "text-bear"}>{t.skill_pct > 0 ? "+" : ""}{t.skill_pct}%</b>.
+        {t.grade && t.grade.grade !== "none" && (
+          <span className="block">
+            <b className={t.grade.grade === "A" ? "text-bull" : t.grade.grade === "B" ? "text-ink" : "text-warn"}>Reliability grade {t.grade.grade}</b>:{" "}
+            {t.grade.text}
+          </span>
+        )}
         <span className="block text-faint">A probability from past behaviour, not a promise. Before brokerage, taxes and slippage. Not investment advice.</span>
       </p>
     </section>
@@ -137,7 +143,29 @@ export function OutlookReliability({ outlook }: { outlook: Outlook | undefined }
           <p className="mt-2 text-[11px] text-faint">
             Trained on {t.train_samples.toLocaleString()} candles ({fmtDate(t.train_period[0])} – {fmtDate(t.train_period[1])}), tested on the
             {" "}{t.samples.toLocaleString()} that came after. Accuracy {t.accuracy_pct}% · Brier {t.brier} vs {t.brier_baseline} for guessing.
+            {t.calibrated && t.brier_uncalibrated != null && <> Calibrated: error {t.brier_uncalibrated} → {t.brier}, so the percentages read true.</>}
           </p>
+          {t.walk_forward && t.walk_forward.length > 0 && (
+            <div className="mt-3 border-t border-line pt-2 text-xs">
+              <p className="font-medium text-muted">
+                Walk-forward check{t.grade ? ` · grade ${t.grade.grade}` : ""}
+              </p>
+              <p className="mt-0.5 text-faint">Refit on everything before each period, then tested on it:</p>
+              <div className="mt-1 grid grid-cols-2 gap-1 sm:grid-cols-4">
+                {t.walk_forward.map((f) => (
+                  <div key={f.from} className="rounded-md bg-panel-2 px-2 py-1">
+                    <p className="text-[10px] text-faint">
+                      {fmtDate(f.from)} – {fmtDate(f.to)}
+                    </p>
+                    <p className={`tabular font-semibold ${f.skill_pct > 0 ? "text-bull" : "text-bear"}`}>
+                      {f.skill_pct > 0 ? "+" : ""}
+                      {f.skill_pct}% skill
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {t.features_used && (
             <div className="mt-3 border-t border-line pt-2 text-xs">
               <p className="font-medium text-muted">Strategies the model uses</p>

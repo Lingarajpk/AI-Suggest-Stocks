@@ -5,7 +5,7 @@ import { TIMEFRAME_LABEL } from "@/lib/api";
 import { fmtPct, fmtTime } from "@/lib/format";
 import { usePx } from "@/lib/priceDigits";
 import type { Quote, SignalHistory, Timeframe } from "@/lib/types";
-import { Panel } from "./ui";
+import { EvidenceBadge, Panel } from "./ui";
 
 type Tone = "bull" | "bear" | "warn" | "muted";
 const BOX: Record<Tone, string> = {
@@ -124,7 +124,9 @@ export function TradeStatus({ history, quote, timeframe }: { history: SignalHist
             const st = stats[side];
             return (
               <div key={side} className="rounded-md border border-line px-2 py-1.5">
-                <p className={`font-semibold ${side === "buy" ? "text-bull" : "text-bear"}`}>Past {side.toUpperCase()} trades</p>
+                <p className={`flex items-center justify-between gap-1 font-semibold ${side === "buy" ? "text-bull" : "text-bear"}`}>
+                  Past {side.toUpperCase()} trades <EvidenceBadge evidence={st.evidence} />
+                </p>
                 {st.count ? (
                   <>
                     <p className="tabular text-muted">
@@ -137,6 +139,20 @@ export function TradeStatus({ history, quote, timeframe }: { history: SignalHist
                       {st.sharpe ?? "—"}
                       {st.avg_win_pct != null && st.avg_loss_pct != null && ` · win ${fmtPct(st.avg_win_pct)} / loss ${fmtPct(st.avg_loss_pct)}`}
                     </p>
+                    {st.evidence?.win_rate_low != null && (
+                      <p className="tabular text-faint">
+                        True win rate likely {st.evidence.win_rate_low}–{st.evidence.win_rate_high}%
+                        {st.evidence.breakeven_win_rate != null && <> · break-even {st.evidence.breakeven_win_rate}%</>}
+                      </p>
+                    )}
+                    {st.avg_mfe_pct != null && st.avg_mae_pct != null && (
+                      <p className="tabular text-faint">
+                        While open: best {fmtPct(st.avg_mfe_pct)} / worst {fmtPct(st.avg_mae_pct)} on average
+                      </p>
+                    )}
+                    {st.decay && st.decay.status !== "holding" && (
+                      <p className={st.decay.status === "fading" ? "text-warn" : "text-bull"}>{st.decay.text}</p>
+                    )}
                     <EquitySparkline points={st.equity} />
                   </>
                 ) : (
@@ -146,7 +162,8 @@ export function TradeStatus({ history, quote, timeframe }: { history: SignalHist
             );
           })}
           <p className="col-span-2 text-faint">
-            {stats.rules} PF = profit factor (gains ÷ losses, above 1 makes money); DD = worst fall from a peak. Not investment advice.
+            {stats.rules} PF = profit factor (gains ÷ losses, above 1 makes money); DD = worst fall from a peak. &quot;Likely&quot; range = 95%
+            Wilson interval; &quot;Proven&quot; only when even its low end beats break-even over 30+ trades. Not investment advice.
           </p>
         </div>
       )}

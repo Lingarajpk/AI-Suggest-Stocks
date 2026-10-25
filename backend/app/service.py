@@ -6,6 +6,7 @@ import time
 from datetime import date, datetime, timedelta
 
 from app import options as opt
+from app.analysis import dataquality as dq
 from app.analysis import indicators as ta
 from app.analysis import patterns as pt
 from app.analysis import probability as pb
@@ -69,7 +70,7 @@ def opening_range(df, timeframe: Timeframe) -> dict | None:
 
 
 def _data_issues(sig: dict) -> list[str]:
-    return [r for r in sig["no_trade_reasons"] if r.startswith("Only ") or "stale" in r or "quote is" in r]
+    return [r for r in sig["no_trade_reasons"] if r.startswith(("Only ", "Data check")) or "stale" in r or "quote is" in r]
 
 # Bars sent to the chart (the analysis itself always uses the full history).
 CHART_BARS = {"1m": 750, "3m": 750, "5m": 900, "15m": 800, "30m": 800, "1h": 700, "1d": 750, "1w": 400}
@@ -398,6 +399,14 @@ class MarketService:
             sig = evaluate(df, df, timeframe, now_ist(), freshness)
             return {"signal": sig, "snapshot": {}, "candles": [], "series": {}, "patterns": {"current": []}, "strategies": None}
         sig = evaluate(df, ind, timeframe, now_ist(), freshness)
+        from app.providers.base import TIMEFRAMES
+
+        quality = self._memoized((inst.instrument_key, timeframe, "quality"), stamp,
+                                 lambda: dq.check(df, TIMEFRAMES[timeframe].bar_minutes, self.hours, inst.kind != "index"))
+        if not quality["ok"]:  # broken candles: no call, whatever the indicators say
+            sig = {**sig, "status": "no_trade", "scenario": None,
+                   "no_trade_reasons": sig["no_trade_reasons"] + ["Data check failed: " + "; ".join(
+                       i["text"] for i in quality["issues"] if i["level"] == "error")]}
         last = ind.iloc[-1]
         found = await self.detect_patterns(inst, timeframe, df, ind)
         strat = await self.run_strategies(inst, timeframe, df, ind)
@@ -410,13 +419,14 @@ class MarketService:
                                                              cost_pct=cost_for(timeframe, inst.kind),
                                                              cost_note=self.cost_note)),
             "patterns": {"current": pt.current(found)},
+            "data_quality": quality,
             "opening_range": opening_range(df, timeframe),
             "strategies": self._memoized((inst.instrument_key, timeframe, "strategies", with_series), stamp,
                                          lambda: sx.block(df, ind, strat, with_series)),
         }
         if with_series:
             # Data-quality NO TRADE reasons (not "weak evidence") also block the combined call.
-            issues = [r for r in sig["no_trade_reasons"] if r.startswith("Only ") or "stale" in r or "quote is" in r]
+            issues = _data_issues(sig)
             ready, built = self.outlook_model_nowait(timeframe)
             if ready:
                 result["outlook"] = pb.outlook(built, pb.features(df, ind, found, strat["features"]), timeframe, not issues, issues)

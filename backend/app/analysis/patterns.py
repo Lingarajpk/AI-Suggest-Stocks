@@ -941,7 +941,10 @@ RESOLVED = ("target_hit", "stopped", "expired")
 
 
 def finalize(s: dict) -> dict:
+    from app.analysis import reliability as rl
+
     n = s["wins"] + s["losses"] + s["expired"]
+    ci = rl.wilson(s["wins"], n)
     return {
         "detected": s["detected"],
         "resolved": n,
@@ -956,6 +959,9 @@ def finalize(s: dict) -> dict:
         "profit_factor": _profit_factor(s["pnl"]),
         "volume_confirmed_n": s["vol_n"],
         "volume_confirmed_success_rate": round(100 * s["vol_wins"] / s["vol_n"], 1) if s["vol_n"] else None,
+        "success_rate_low": ci[0] if ci else None,
+        "success_rate_high": ci[1] if ci else None,
+        "evidence": rl.evidence(s["pnl"]),
     }
 
 

@@ -35,6 +35,7 @@ import pandas as pd
 
 from app.analysis import candles as cs
 from app.analysis import indicators as ta
+from app.analysis import reliability as rl
 from app.analysis import volume_profile as vp
 from app.analysis.history import profit_factor, simulate_trades
 from app.analysis.signals import MIN_BARS
@@ -495,7 +496,7 @@ def _event(df: pd.DataFrame, s: pd.Series) -> dict | None:
 
 # ---- backtest -------------------------------------------------------------
 def _empty() -> dict:
-    return {"buy_n": 0, "buy_hit": 0, "sell_n": 0, "sell_hit": 0, "ret": [], "pnl": [], "gross": [], "base_up": 0, "base_n": 0}
+    return {"buy_n": 0, "buy_hit": 0, "sell_n": 0, "sell_hit": 0, "ret": [], "pnl": [], "gross": [], "times": [], "base_up": 0, "base_n": 0}
 
 
 def raw_stats(df: pd.DataFrame, ind: pd.DataFrame, res: dict, horizon: int, cost_pct: float = 0.0) -> dict[str, dict]:
@@ -520,6 +521,7 @@ def raw_stats(df: pd.DataFrame, ind: pd.DataFrame, res: dict, horizon: int, cost
         trades, _ = simulate_trades(df, ind, b, s, cost_pct)
         acc["pnl"] = [float(t["pnl_pct"]) for t in trades]
         acc["gross"] = [float(t["gross_pnl_pct"]) for t in trades]
+        acc["times"] = [t["exit_time"] for t in trades]
         out[key] = acc
     return out
 
@@ -534,15 +536,21 @@ def merge_stats(raw: list[dict[str, dict]]) -> dict[str, dict]:
             a["ret"] += v["ret"]
             a["pnl"] += v["pnl"]
             a["gross"] += v.get("gross", v["pnl"])
-    return {k: finalize(v) for k, v in acc.items()}
+            a["times"] += v.get("times") or [""] * len(v["pnl"])
+    # Deflated Sharpe: every strategy and candlestick that was backtested counts as one trial.
+    trials = sum(1 for a in acc.values() if a["pnl"])
+    return {k: finalize(v, trials=trials) for k, v in acc.items()}
 
 
-def finalize(a: dict) -> dict:
+def finalize(a: dict, trials: int = 1) -> dict:
     n = a["buy_n"] + a["sell_n"]
     p_up = a["base_up"] / a["base_n"] if a["base_n"] else None
     hit = (a["buy_hit"] + a["sell_hit"]) / n if n else None
     base = (a["buy_n"] * p_up + a["sell_n"] * (1 - p_up)) / n if n and p_up is not None else None
     pnl = a["pnl"]
+    times = a.get("times") or []
+    ordered = [p for _, p in sorted(zip(times, pnl), key=lambda x: x[0])] if len(times) == len(pnl) else pnl
+    hit_ci = rl.wilson(a["buy_hit"] + a["sell_hit"], n)
     return {
         "signals": n,
         "buy_signals": a["buy_n"],
@@ -556,6 +564,12 @@ def finalize(a: dict) -> dict:
         "avg_trade_pct": round(sum(pnl) / len(pnl), 2) if pnl else None,  # net of costs
         "gross_avg_trade_pct": round(sum(a["gross"]) / len(a["gross"]), 2) if a.get("gross") else None,
         "profit_factor": profit_factor(pnl),
+        "hit_rate_low": hit_ci[0] if hit_ci else None,
+        "hit_rate_high": hit_ci[1] if hit_ci else None,
+        "evidence": rl.evidence(pnl),
+        "deflated_sharpe": rl.deflated_sharpe(pnl, trials),
+        "risk": rl.risk_stats(ordered),
+        "decay": rl.decay(ordered),
     }
 
 

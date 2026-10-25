@@ -23,7 +23,7 @@ import { TradeStatus } from "./TradeStatus";
 import { Disclaimer } from "./Disclaimer";
 import { CHART_LEGEND, PriceChart, type ChartTrade } from "./PriceChart";
 import { StatusNotices } from "./StatusNotices";
-import { FreshnessBadge, HowItWorks, Panel, ScoreBar, SignalBadge, SkeletonRows } from "./ui";
+import { DataQualityNote, FreshnessBadge, HowItWorks, Panel, ScoreBar, SignalBadge, SkeletonRows } from "./ui";
 
 const TIMEFRAMES: Timeframe[] = ["1m", "3m", "5m", "15m", "30m", "1h", "1d", "1w"];
 
@@ -437,6 +437,7 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
               />
             )}
             <div className="space-y-5">
+              <DataQualityNote quality={data.data_quality} />
               {data.history && <TradeStatus history={data.history} quote={quote} timeframe={data.timeframe} />}
               <RisksPanel risks={sig?.risks ?? []} />
             </div>

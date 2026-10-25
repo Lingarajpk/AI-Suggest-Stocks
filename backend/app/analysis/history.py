@@ -13,6 +13,7 @@ import math
 import numpy as np
 import pandas as pd
 
+from app.analysis import reliability as rl
 from app.analysis.costs import COST_NOTE
 from app.analysis.signals import MIN_BARS, WEIGHTS
 from app.models import Timeframe
@@ -87,11 +88,24 @@ def simulate_trades(df: pd.DataFrame, ind: pd.DataFrame, buy: pd.Series, sell: p
     trades: list[dict] = []
     pos: dict | None = None
 
+    def excursion(i: int, fav: float, adv: float) -> None:
+        # Best and worst price reached while the trade was open, as % of the entry (MFE / MAE).
+        e, d = pos["entry_price"], 1 if pos["side"] == "buy" else -1
+        pos["mfe_pct"] = max(pos["mfe_pct"], d * (fav / e - 1) * 100)
+        pos["mae_pct"] = min(pos["mae_pct"], d * (adv / e - 1) * 100)
+
     def close_pos(i: int, price: float, reason: str) -> None:
         d = 1 if pos["side"] == "buy" else -1
         gross = float(d * (price / pos["entry_price"] - 1) * 100)
+        # On the exit bar, prices beyond the exit level were never part of the trade.
+        hi, lo = o_high[i], o_low[i]
+        if reason == "stop":
+            hi, lo = (min(hi, max(price, pos["entry_price"])), price) if d == 1 else (price, max(lo, min(price, pos["entry_price"])))
+        elif reason == "target":
+            hi, lo = (price, lo) if d == 1 else (hi, price)
+        excursion(i, hi if d == 1 else lo, lo if d == 1 else hi)
         trades.append({
-            **{k: v for k, v in pos.items() if k != "i"},
+            **{k: (round(v, 2) if k in ("mfe_pct", "mae_pct") else v) for k, v in pos.items() if k != "i"},
             "exit_time": idx[i].isoformat(),
             "exit_price": round(float(price), 2),
             "reason": reason,
@@ -120,6 +134,8 @@ def simulate_trades(df: pd.DataFrame, ind: pd.DataFrame, buy: pd.Series, sell: p
                 close_pos(i, o_close[i], "reversal"); pos = None
             elif (long and s_[i]) or (not long and b[i]):
                 close_pos(i, o_close[i], "opposite"); pos = None
+            else:
+                excursion(i, o_high[i] if long else o_low[i], o_low[i] if long else o_high[i])
         if pos is None and (b[i] or s_[i]) and not math.isnan(atr[i]) and atr[i] > 0:
             d = 1 if b[i] else -1
             pos = {
@@ -129,6 +145,8 @@ def simulate_trades(df: pd.DataFrame, ind: pd.DataFrame, buy: pd.Series, sell: p
                 "entry_price": round(float(o_close[i]), 2),
                 "stop": round(float(o_close[i] - d * 1.5 * atr[i]), 2),
                 "target": round(float(o_close[i] + d * 2.5 * atr[i]), 2),
+                "mfe_pct": 0.0,
+                "mae_pct": 0.0,
             }
 
     open_trade = None
@@ -145,7 +163,7 @@ def simulate_trades(df: pd.DataFrame, ind: pd.DataFrame, buy: pd.Series, sell: p
         if fading:
             warnings.append("MACD momentum " + ("falling" if long else "rising"))
         open_trade = {
-            **{k: v for k, v in pos.items() if k != "i"},
+            **{k: (round(v, 2) if k in ("mfe_pct", "mae_pct") else v) for k, v in pos.items() if k != "i"},
             "bars_held": last - pos["i"],
             "last_close": round(float(o_close[last]), 2),
             "pnl_pct": round(float(d * (o_close[last] / pos["entry_price"] - 1) * 100) - cost_pct, 2),
@@ -207,7 +225,9 @@ def trade_stats(trades: list[dict]) -> dict:
     if not trades:
         return {"count": 0, "wins": 0, "win_rate": None, "avg_pnl_pct": None, "total_pnl_pct": None,
                 "gross_avg_pnl_pct": None, "cost_pct": None, "avg_win_pct": None, "avg_loss_pct": None,
-                "profit_factor": None, "max_drawdown_pct": None, "sharpe": None, "sqn": None, "equity": []}
+                "profit_factor": None, "max_drawdown_pct": None, "sharpe": None, "sqn": None, "equity": [],
+                "evidence": rl.evidence([]), "risk": rl.risk_stats([]), "decay": None, "avg_mfe_pct": None, "avg_mae_pct": None}
+    trades = sorted(trades, key=lambda t: t["exit_time"])
     pnl = [float(t["pnl_pct"]) for t in trades]
     gross = [float(t.get("gross_pnl_pct", t["pnl_pct"])) for t in trades]
     won = [p for p in pnl if p > 0]
@@ -228,7 +248,17 @@ def trade_stats(trades: list[dict]) -> dict:
         "sharpe": sharpe(trades),
         "sqn": sqn(pnl),
         "equity": points,
+        "evidence": rl.evidence(pnl),
+        "risk": rl.risk_stats(pnl),
+        "decay": rl.decay(pnl),
+        "avg_mfe_pct": _avg([t.get("mfe_pct") for t in trades]),
+        "avg_mae_pct": _avg([t.get("mae_pct") for t in trades]),
     }
+
+
+def _avg(xs: list) -> float | None:
+    xs = [float(x) for x in xs if x is not None]
+    return round(sum(xs) / len(xs), 2) if xs else None
 
 
 def signal_history(df: pd.DataFrame, ind: pd.DataFrame, timeframe: Timeframe, with_markers: bool, cost_pct: float = 0.0,
