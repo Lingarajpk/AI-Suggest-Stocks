@@ -44,6 +44,19 @@ const INDICATOR_ROWS: [string, string, (v: number | null) => string][] = [
   ["VWAP", "vwap", fmtPrice],
   ["Rel volume", "rel_volume", (v) => (v == null ? "—" : `${v.toFixed(2)}x`)],
   ["ROC 10", "roc10", (v) => fmtPct(v)],
+  ["Stochastic %K / %D", "stoch_k", (v) => fmtNum(v)],
+  ["MFI 14", "mfi14", (v) => fmtNum(v)],
+  ["Z-score (20)", "zscore20", (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}`)],
+  ["TTM squeeze", "squeeze_on", (v) => (v == null ? "—" : v ? "ON (coiled)" : "off")],
+  ["Keltner upper", "kc_upper", fmtPrice],
+  ["Keltner lower", "kc_lower", fmtPrice],
+  ["Donchian 20 high", "dc_upper", fmtPrice],
+  ["Donchian 20 low", "dc_lower", fmtPrice],
+  ["Chandelier exit (long)", "chandelier_long", fmtPrice],
+  ["Chandelier exit (short)", "chandelier_short", fmtPrice],
+  ["CPR pivot", "cpr_p", fmtPrice],
+  ["CPR top / bottom", "cpr_tc", fmtPrice],
+  ["R1 / S1", "cpr_r1", fmtPrice],
 ];
 
 // ---- chart layers (remembered per browser) ------------------------------------
@@ -520,7 +533,17 @@ export function StockView({ symbol, initialTimeframe = "1d" }: { symbol: string;
                   {INDICATOR_ROWS.map(([label, key, f]) => (
                     <div key={key} className="contents">
                       <dt className="text-muted">{label}</dt>
-                      <dd className="tabular text-right">{key === "plus_di" ? `${fmtNum(snap.plus_di)} / ${fmtNum(snap.minus_di)}` : f(snap[key] ?? null)}</dd>
+                      <dd className="tabular text-right">
+                        {key === "plus_di"
+                          ? `${fmtNum(snap.plus_di)} / ${fmtNum(snap.minus_di)}`
+                          : key === "stoch_k"
+                            ? `${fmtNum(snap.stoch_k)} / ${fmtNum(snap.stoch_d)}`
+                            : key === "cpr_tc"
+                              ? `${fmtPrice(snap.cpr_tc ?? null)} / ${fmtPrice(snap.cpr_bc ?? null)}`
+                              : key === "cpr_r1"
+                                ? `${fmtPrice(snap.cpr_r1 ?? null)} / ${fmtPrice(snap.cpr_s1 ?? null)}`
+                                : f(snap[key] ?? null)}
+                      </dd>
                     </div>
                   ))}
                 </dl>

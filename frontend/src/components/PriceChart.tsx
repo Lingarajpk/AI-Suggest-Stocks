@@ -29,6 +29,7 @@ const LEGEND_C = chartPalette("light");
 const STRATEGY_TAG: Partial<Record<StrategyKey, string>> = {
   trend_momentum: "T+M", liquidity_sweep: "Sweep", fvg: "FVG", ifvg: "IFVG", amd: "AMD", supertrend_flip: "ST", macd_divergence: "Div",
   orb: "ORB", breakout_20: "20H", flag: "Flag", reclaim_ma20: "MA20", oversold_bounce: "RSI",
+  squeeze: "SQZ", zscore_reversion: "Z", nr7_breakout: "NR7", cpr_breakout: "CPR",
 };
 
 interface Props {

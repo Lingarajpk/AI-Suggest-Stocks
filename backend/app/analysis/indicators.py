@@ -206,6 +206,41 @@ def swing_levels(df: pd.DataFrame, last_close: float, window: int = 120, k: int 
     return support, resistance
 
 
+def obv(df: pd.DataFrame) -> pd.Series:
+    """On-balance volume: volume added on up closes, subtracted on down closes."""
+    return (np.sign(df["close"].diff()).fillna(0.0) * df["volume"]).cumsum()
+
+
+def mfi(df: pd.DataFrame, n: int = 14) -> pd.Series:
+    """Money Flow Index: RSI of typical price weighted by volume (0-100)."""
+    tp = (df["high"] + df["low"] + df["close"]) / 3
+    flow = tp * df["volume"]
+    up = flow.where(tp > tp.shift(), 0.0).rolling(n).sum()
+    down = flow.where(tp < tp.shift(), 0.0).rolling(n).sum()
+    return (100 - 100 / (1 + up / down.replace(0, np.nan))).where(down > 0, 100.0).where(up.notna())
+
+
+def stochastic(df: pd.DataFrame, n: int = 14, smooth: int = 3) -> tuple[pd.Series, pd.Series]:
+    """Slow stochastic %K (n, smoothed) and %D."""
+    lo, hi = df["low"].rolling(n).min(), df["high"].rolling(n).max()
+    raw = 100 * (df["close"] - lo) / (hi - lo).replace(0, np.nan)
+    k = raw.rolling(smooth).mean()
+    return k, k.rolling(smooth).mean()
+
+
+def session_pivots(df: pd.DataFrame) -> pd.DataFrame:
+    """Central Pivot Range from the PREVIOUS session's high, low and close (floor-trader pivots):
+    pivot P = (H+L+C)/3, BC = (H+L)/2, TC = 2P - BC, R1 = 2P - L, S1 = 2P - H."""
+    day = pd.Series(df.index.date, index=df.index)
+    daily = df.groupby(day.values).agg(high=("high", "max"), low=("low", "min"), close=("close", "last")).shift(1)
+    p = (daily["high"] + daily["low"] + daily["close"]) / 3
+    bc = (daily["high"] + daily["low"]) / 2
+    tc = 2 * p - bc
+    piv = pd.DataFrame({"cpr_p": p, "cpr_bc": np.minimum(bc, tc), "cpr_tc": np.maximum(bc, tc),
+                        "cpr_r1": 2 * p - daily["low"], "cpr_s1": 2 * p - daily["high"]})
+    return piv.reindex(day.values).set_axis(df.index)
+
+
 def compute(df: pd.DataFrame, intraday: bool) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
     close = df["close"]
@@ -234,6 +269,25 @@ def compute(df: pd.DataFrame, intraday: bool) -> pd.DataFrame:
             out[f"vwap_u{k}"] = out[f"vwap_l{k}"] = np.nan
     out["rel_volume"] = df["volume"] / df["volume"].shift().rolling(20).mean()
     out["roc10"] = close.pct_change(10) * 100
+    # Keltner channel (EMA20 +/- 1.5 ATR) and the TTM squeeze: Bollinger bands inside it = volatility coiled.
+    out["kc_upper"], out["kc_lower"] = out["ema20"] + 1.5 * out["atr14"], out["ema20"] - 1.5 * out["atr14"]
+    out["squeeze_on"] = ((out["bb_upper"] < out["kc_upper"]) & (out["bb_lower"] > out["kc_lower"])).astype(float).where(out["bb_upper"].notna() & out["kc_upper"].notna())
+    out["zscore20"] = (close - mid) / close.rolling(20).std(ddof=0).replace(0, np.nan)
+    # Donchian channel of the 20 candles BEFORE this one, and Chandelier exits (22 candles, 3 ATR).
+    out["dc_upper"], out["dc_lower"] = df["high"].shift().rolling(20).max(), df["low"].shift().rolling(20).min()
+    out["chandelier_long"] = df["high"].rolling(22).max() - 3 * out["atr14"]
+    out["chandelier_short"] = df["low"].rolling(22).min() + 3 * out["atr14"]
+    out["obv"] = obv(df)
+    out["mfi14"] = mfi(df)
+    out["stoch_k"], out["stoch_d"] = stochastic(df)
+    rng = df["high"] - df["low"]
+    out["nr7"] = (rng <= rng.rolling(7).min()).astype(float).where(rng.rolling(7).count() == 7)
+    out["inside_bar"] = ((df["high"] <= df["high"].shift()) & (df["low"] >= df["low"].shift())).astype(float)
+    if intraday:
+        out = pd.concat([out, session_pivots(df)], axis=1)
+    else:
+        for k in ("cpr_p", "cpr_bc", "cpr_tc", "cpr_r1", "cpr_s1"):
+            out[k] = np.nan
     return out
 
 

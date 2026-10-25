@@ -24,6 +24,15 @@ From the day-trader skill pack (github.com/Jakeschincariol/day-trader-skill, MIT
   reclaim_ma20     The close crosses back above its 20-candle average (BUY) or falls below it (SELL).
   oversold_bounce  RSI 14 was under 30 and the candle closes up (BUY); RSI was over 70 and it closes down (SELL).
 
+Volatility and mean-reversion setups, both directions:
+  squeeze          TTM squeeze release: Bollinger bands were inside the Keltner channel for most of the last 8
+                   candles and now break out of it; traded in the direction of momentum (close vs the midline).
+  zscore_reversion Close stretched 2+ standard deviations from its 20-candle mean in a non-trending market
+                   (ADX < 25), then a candle closing back the other way.
+  nr7_breakout     After the narrowest-range candle of the last 7 (or an inside candle), a close beyond its high/low.
+  cpr_breakout     Intraday, on narrow Central Pivot Range days (from the previous session's high/low/close): the
+                   session's first close above the top of the range (or below the bottom).
+
 Every strategy's points are backtested with the same trade rules as the main signal
 (history.simulate_trades) and against the base rate, pooled across the universe.
 """
@@ -69,6 +78,14 @@ CATALOG: dict[str, tuple[str, str, str]] = {
                      "Close crosses back above the 20-candle average (or drops below it)."),
     "oversold_bounce": ("Oversold bounce", "reversal",
                         "RSI was under 30 and the candle closes up (or over 70 and it closes down)."),
+    "squeeze": ("TTM squeeze release", "breakout",
+                "Bollinger bands coiled inside the Keltner channel, then expand; traded with the momentum."),
+    "zscore_reversion": ("Z-score reversion", "reversal",
+                         "Price 2+ standard deviations from its 20-candle mean in a non-trending market, then turns back."),
+    "nr7_breakout": ("NR7 / inside-bar breakout", "breakout",
+                     "After the narrowest candle of the last 7 (or an inside candle), a close beyond its high or low."),
+    "cpr_breakout": ("CPR breakout", "breakout",
+                     "Intraday, narrow Central Pivot Range days: the session's first close above the range (or below)."),
 }
 ORB_MINUTES = 15
 ORB_LAST_ENTRY = 0.75  # no new opening-range entries in the last quarter of the session
@@ -89,6 +106,12 @@ FEATURES: dict[str, str] = {
     "trend_quality": "Trend quality (R²)",
     "efficiency": "Efficiency ratio",
     "vol_regime": "Volatility regime (ATR percentile)",
+    "squeeze": "TTM squeeze release",
+    "zscore": "Z-score (stretch from the mean)",
+    "stoch": "Stochastic %K",
+    "mfi": "Money Flow Index",
+    "obv_trend": "On-balance volume trend",
+    "cpr_pos": "Price vs central pivot",
 }
 
 LEVELS = (0.5, 1.0, 1.5)
@@ -329,6 +352,41 @@ def classic_setups(df: pd.DataFrame, ind: pd.DataFrame) -> dict[str, tuple[pd.Se
     return {k: (b.fillna(False).astype(bool), s.fillna(False).astype(bool)) for k, (b, s) in out.items()}
 
 
+CPR_NARROW = 0.25  # CPR width below this share of the previous session's range counts as narrow
+
+
+def extra_setups(df: pd.DataFrame, ind: pd.DataFrame, intraday: bool) -> dict[str, tuple[pd.Series, pd.Series]]:
+    """Squeeze release, z-score reversion, NR7 / inside-bar breakout and CPR breakout (all causal)."""
+    c, o = df["close"], df["open"]
+    sq = ind["squeeze_on"]
+    coiled = (sq.shift() == 1) & (sq.shift().rolling(8).sum() >= 5)
+    mid = (ind["dc_upper"] + ind["dc_lower"]) / 2
+    mom = c - (mid + ind["ema20"]) / 2
+    released = coiled & (sq == 0)
+    out = {"squeeze": (released & (mom > 0) & (c > c.shift()), released & (mom < 0) & (c < c.shift()))}
+
+    z, calm = ind["zscore20"], ind["adx14"] < 25
+    out["zscore_reversion"] = ((z.shift() <= -2) & calm & (c > o) & (c > c.shift()), (z.shift() >= 2) & calm & (c < o) & (c < c.shift()))
+
+    coil = (ind["nr7"].shift() == 1) | (ind["inside_bar"].shift() == 1)
+    out["nr7_breakout"] = (coil & (c > df["high"].shift()), coil & (c < df["low"].shift()))
+
+    if intraday and ind["cpr_tc"].notna().any():
+        day = pd.Series(df.index.date, index=df.index)
+        prev_range = df.groupby(day.values)["high"].max().shift(1) - df.groupby(day.values)["low"].min().shift(1)
+        width = (ind["cpr_tc"] - ind["cpr_bc"]) / prev_range.reindex(day.values).set_axis(df.index)
+        narrow = width < CPR_NARROW
+        up = narrow & (c > ind["cpr_tc"]) & (c.shift() <= ind["cpr_tc"]) & (day == day.shift())
+        dn = narrow & (c < ind["cpr_bc"]) & (c.shift() >= ind["cpr_bc"]) & (day == day.shift())
+        # Only the session's first such close, either way.
+        first = (up | dn) & ((up | dn).astype(int).groupby(day.values).cumsum() == 1)
+        out["cpr_breakout"] = (up & first, dn & first)
+    else:
+        none = pd.Series(False, index=df.index)
+        out["cpr_breakout"] = (none, none)
+    return {k: (b.fillna(False).astype(bool), s.fillna(False).astype(bool)) for k, (b, s) in out.items()}
+
+
 def compute(df: pd.DataFrame, ind: pd.DataFrame, timeframe: str) -> dict:
     """All strategies, candlesticks and order-flow proxies for one instrument's completed candles."""
     intraday = is_intraday(timeframe)
@@ -367,6 +425,7 @@ def compute(df: pd.DataFrame, ind: pd.DataFrame, timeframe: str) -> dict:
         b, s, labels["orb"] = np.zeros(n, bool), np.zeros(n, bool), [""] * n
     signals["orb"] = as_series(b, s)
     signals.update(classic_setups(df, ind))
+    signals.update(extra_setups(df, ind, intraday))
 
     cdl = cs.detect_series(df, ind)
     levels = vp.levels_series(df, intraday)
@@ -389,6 +448,17 @@ def compute(df: pd.DataFrame, ind: pd.DataFrame, timeframe: str) -> dict:
     X["macd_div"] = cs.decayed(macd_ev["macd_div"], DECAY)
     reg = rg.series(df, ind)
     X = pd.concat([X, rg.features(df, ind, reg, intraday)], axis=1)
+    X["squeeze"] = cs.decayed(signed("squeeze"), DECAY)
+    X["zscore"] = (ind["zscore20"].clip(-3, 3) / 3).fillna(0.0)
+    X["stoch"] = ((ind["stoch_k"] - 50) / 50).fillna(0.0)
+    has_volume = bool((df["volume"] > 0).mean() > 0.5)
+    X["mfi"] = ((ind["mfi14"] - 50) / 50).fillna(0.0) if has_volume else 0.0
+    if has_volume:
+        vol10 = df["volume"].rolling(10).sum().replace(0, np.nan)
+        X["obv_trend"] = (ind["obv"].diff(10) / vol10).clip(-1, 1).fillna(0.0)
+    else:
+        X["obv_trend"] = 0.0
+    X["cpr_pos"] = ((df["close"] - ind["cpr_p"]) / ind["atr14"]).clip(-3, 3).fillna(0.0) / 3
 
     return {
         "intraday": intraday,
@@ -436,8 +506,18 @@ def block(df: pd.DataFrame, ind: pd.DataFrame, res: dict, with_series: bool) -> 
         elif key == "supertrend_flip":
             state = "long" if v["st_dir"] == 1 else "short" if v["st_dir"] == -1 else "none"
             detail = f"Supertrend {'up' if state == 'long' else 'down'} at {ta.clean(v['st_line'])}"
-        elif key in ("amd", "orb") and not res["intraday"]:
+        elif key in ("amd", "orb", "cpr_breakout") and not res["intraday"]:
             state, detail = "n/a", "Session-based: only applies to intraday candles."
+        elif key == "squeeze":
+            sq = ind["squeeze_on"].fillna(0).to_numpy()
+            run = 0
+            while run < len(sq) and sq[len(sq) - 1 - run] == 1:
+                run += 1
+            detail = f"Squeeze ON for {run} candle{'s' if run != 1 else ''}: volatility is coiled" if run else "No squeeze: bands are outside the Keltner channel"
+        elif key == "zscore_reversion":
+            z = ta.clean(v["zscore20"])
+            if z is not None:
+                detail = f"Z-score {z:+.2f} ({'stretched' if abs(z) >= 2 else 'normal range'})"
         elif key == "fvg":
             open_fvg = [z for z in res["zones"] if z["kind"] == "fvg"]
             detail = f"{len(open_fvg)} open gap(s) nearby" if open_fvg else "No open gaps"

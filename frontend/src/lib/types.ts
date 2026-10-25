@@ -179,7 +179,8 @@ export interface Analysis {
 
 export type StrategyKey =
   | "trend_momentum" | "liquidity_sweep" | "fvg" | "ifvg" | "amd" | "breakout_prob" | "supertrend_flip" | "macd_divergence"
-  | "orb" | "breakout_20" | "flag" | "reclaim_ma20" | "oversold_bounce";
+  | "orb" | "breakout_20" | "flag" | "reclaim_ma20" | "oversold_bounce"
+  | "squeeze" | "zscore_reversion" | "nr7_breakout" | "cpr_breakout";
 
 /** High and low of the session's first 15 minutes (intraday charts of 15 minutes or less). */
 export interface OpeningRange {

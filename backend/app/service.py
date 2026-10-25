@@ -83,7 +83,8 @@ CHART_SERIES = ("ema20", "ema50", "ema200", "bb_upper", "bb_lower", "vwap", "vwa
 SNAPSHOT_FIELDS = (
     "ema9", "ema20", "ema50", "ema200", "rsi14", "macd", "macd_signal", "macd_hist", "atr14",
     "bb_upper", "bb_mid", "bb_lower", "adx14", "plus_di", "minus_di", "vwap", "rel_volume", "roc10",
-    "sma20", "st_line", "st_dir",
+    "sma20", "st_line", "st_dir", "kc_upper", "kc_lower", "squeeze_on", "zscore20", "dc_upper", "dc_lower",
+    "chandelier_long", "chandelier_short", "mfi14", "stoch_k", "stoch_d", "cpr_p", "cpr_bc", "cpr_tc", "cpr_r1", "cpr_s1",
 )
 
 
