@@ -133,3 +133,51 @@ def test_paper_api_flow(client):
     assert after["orders"][0]["status"] == "cancelled"
     reset = client.post(f"/api/paper/{DEV}/reset", json={"capital": 50000}).json()
     assert reset["account"]["capital"] == 50000 and reset["orders"] == []
+
+
+class CountingStore:
+    backend = "redis"
+
+    def __init__(self):
+        self.data, self.gets, self.sets = {}, 0, 0
+
+    async def get(self, key):
+        self.gets += 1
+        return self.data.get(key)
+
+    async def set(self, key, value, ttl):
+        self.sets += 1
+        self.data[key] = value
+
+
+async def test_store_skips_unchanged_saves(tmp_path):
+    store = CountingStore()
+    ps = paper.PaperStore(tmp_path, store)
+    dev = "device-0123456789abcdef"
+    await ps.load_all()
+    acc = await ps.get(dev)
+    await ps.save(dev)
+    assert store.data["paper:v1:devices"] == [dev]
+    before = (store.gets, store.sets)
+    await ps.save(dev)  # nothing changed: no Redis traffic at all
+    assert (store.gets, store.sets) == before
+    acc["cash"] -= 1
+    await ps.save(dev)
+    assert store.sets == before[1] + 1 and store.gets == before[0]  # account only; the device index is known
+    again = paper.PaperStore(tmp_path / "other", store)
+    await again.load_all()
+    assert (await again.get(dev))["cash"] == acc["cash"]
+
+
+async def test_memory_cache_copies_and_size_cap():
+    from app.cache import MemoryCache
+
+    c = MemoryCache(max_items=100, max_bytes=60)
+    await c.set("a", {"x": [1, 2]}, 60)
+    got = await c.get("a")
+    got["x"].append(3)  # a reader's copy: the cached value is not changed
+    assert await c.get("a") == {"x": [1, 2]}
+    await c.set("b", "y" * 30, 60)
+    await c.set("c", "z" * 30, 60)  # over 60 bytes: the oldest entries go
+    assert await c.get("a") is None and await c.get("c") == "z" * 30
+    assert c.status()["items"] <= 2

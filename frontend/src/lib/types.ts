@@ -478,7 +478,8 @@ export interface Health {
     approval_pending?: boolean;
   } | null;
   upstox_configured: boolean;
-  cache: string;
+  cache: { backend: "memory"; items: number; mb: number };
+  durable_store?: { backend: "redis"; ok: boolean; problem: string | null; commands_since_start: number } | null;
   nvidia_configured: boolean;
   nvidia_model: string;
   news?: { enabled: boolean; source: string; scored_by: "nvidia" | "keywords" };

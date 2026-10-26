@@ -304,6 +304,8 @@ class PaperStore:
         self.folder = folder
         self.durable = durable
         self.accounts: dict[str, dict] = {}
+        self._indexed: set[str] | None = None  # devices known to be in the store's index
+        self._saved: dict[str, str] = {}  # last saved JSON per device: unchanged accounts are not rewritten
 
     def _path(self, device: str) -> Path:
         return self.folder / f"paper_{device}.json"
@@ -327,6 +329,7 @@ class PaperStore:
         devices: list[str] = []
         if self.durable is not None:
             devices = await self.durable.get("paper:v1:devices") or []
+            self._indexed = set(devices)
         elif self.folder.exists():
             devices = [f.stem.removeprefix("paper_") for f in self.folder.glob("paper_*.json")]
         for d in devices:
@@ -339,11 +342,17 @@ class PaperStore:
         acc = self.accounts.get(device)
         if acc is None:
             return
+        doc = json.dumps(acc, default=str)
+        if self._saved.get(device) == doc:
+            return
+        self._saved[device] = doc
         if self.durable is not None:
             await self.durable.set(f"paper:v1:{device}", acc, 400 * 86400)
-            index = await self.durable.get("paper:v1:devices") or []
-            if device not in index:
-                await self.durable.set("paper:v1:devices", (index + [device])[-500:], 400 * 86400)
+            if self._indexed is None:
+                self._indexed = set(await self.durable.get("paper:v1:devices") or [])
+            if device not in self._indexed:
+                self._indexed.add(device)
+                await self.durable.set("paper:v1:devices", sorted(self._indexed)[-500:], 400 * 86400)
         try:
             self.folder.mkdir(parents=True, exist_ok=True)
             self._path(device).write_text(json.dumps(acc))

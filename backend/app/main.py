@@ -21,7 +21,7 @@ from app.ai.debate import Debate
 from app.ai.nvidia import NvidiaExplainer
 from app.alerts import AlertEngine, TelegramNotifier
 from app.auth_users import COOKIE, SESSION_DAYS, WS_TOKEN_SECONDS, Auth
-from app.cache import create_cache
+from app.cache import MemoryCache, create_cache
 from app.config import get_settings
 from app.forex.api import router as forex_router
 from app.forex.news import ForexNews
@@ -118,9 +118,12 @@ class QuoteHub:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     http = httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=10.0))
-    cache = create_cache(settings.redis_url)
-    # Redis (when configured) keeps the token across restarts; local files don't survive on free hosting.
-    durable = cache if cache.backend == "redis" else None
+    # Short-lived caches (candles, AI answers) live in this process's memory: faster than a network round trip
+    # and they were nearly all of the Redis traffic. Redis (when configured) only keeps what must survive a
+    # restart on free hosting: the Upstox token, watchlists, push keys, paper accounts, IV and debate history.
+    cache = MemoryCache(max_items=6000, max_bytes=settings.memory_cache_mb * 1_000_000)
+    durable = create_cache(settings.redis_url) if settings.redis_url else None
+    store = durable or cache
     tokens = TokenStore(settings.data_dir / ".upstox_token.json", settings.upstox_access_token.get_secret_value(), durable)
     await tokens.restore()
     if settings.data_mode == "upstox":
@@ -131,18 +134,18 @@ async def lifespan(app: FastAPI):
         log.warning("DATA_MODE=demo: serving SYNTHETIC data, not market data")
         provider = DemoProvider()
     service = MarketService(provider, settings)
-    service.cache = cache
+    service.cache = store
     # Forex: its own service (pairs, session, models, caches) and news, on the same data provider.
     forex = ForexService(provider, settings)
     app.state.forex = forex
-    app.state.http, app.state.cache, app.state.tokens = http, cache, tokens
+    app.state.http, app.state.cache, app.state.durable, app.state.tokens = http, cache, durable, tokens
     app.state.service = service
     app.state.hub = QuoteHub(service)
     app.state.auth = UpstoxAuth(settings, http)
     app.state.oauth_states = {}
     app.state.token_request_until = 0.0  # epoch seconds while an approval request is outstanding
     app.state.explainer = NvidiaExplainer(settings, http, cache)
-    app.state.debate = Debate(app.state.explainer, cache)
+    app.state.debate = Debate(app.state.explainer, store)
     engine = AlertEngine(service, settings)
     engine.listeners.append(app.state.hub.broadcast_alert)
     if settings.telegram_bot_token.get_secret_value() and settings.telegram_chat_id:
@@ -207,6 +210,8 @@ async def lifespan(app: FastAPI):
     await engine.stop()
     await app.state.hub.stop()
     await cache.close()
+    if durable is not None:
+        await durable.close()
     await http.aclose()
 
 
@@ -231,9 +236,9 @@ async def paper_runner(app: FastAPI) -> None:
                 for device, acc in active:
                     events = paper.process(acc, ltp, now, True)
                     paper.snapshot_equity(acc, now)
-                    if events or time.monotonic() - last_save > 60:
+                    if events or time.monotonic() - last_save > 300:
                         await store.save(device)
-                if time.monotonic() - last_save > 60:
+                if time.monotonic() - last_save > 300:
                     last_save = time.monotonic()
                 await asyncio.sleep(PAPER_TICK_SECONDS)
             else:
@@ -352,7 +357,8 @@ async def health(request: Request):
                     "approval_pending": request.app.state.token_request_until > time.time() and tokens.get() is None}
                    if settings.data_mode == "upstox" else None),
         "upstox_configured": bool(settings.upstox_api_key and settings.upstox_api_secret.get_secret_value()),
-        "cache": request.app.state.cache.backend,
+        "cache": {"backend": "memory", **request.app.state.cache.status()},
+        "durable_store": (request.app.state.durable.status() if request.app.state.durable is not None else None),
         "nvidia_configured": bool(settings.nvidia_api_key.get_secret_value()),
         "nvidia_model": settings.nvidia_model,
         "news": {"enabled": settings.news_enabled, "source": "Google News (RSS)",

@@ -142,6 +142,7 @@ class MarketService:
         # (symbol, expiry) -> today's chain snapshots [{time, pcr, atm_iv, straddle, spot}]
         self._opt_trend: dict[tuple[str, str], list[dict]] = {}
         self._iv_saved: dict[str, float] = {}
+        self._iv_hist: dict[str, dict[str, float]] = {}  # read from the store once per symbol
 
     def _memoized(self, key: tuple, stamp: tuple, fn):
         hit = self._memo.get(key)
@@ -738,12 +739,15 @@ class MarketService:
         collected, indices fall back to India VIX's percentile, which is NIFTY's 30-day implied volatility."""
         hist: dict[str, float] = {}
         if self.cache is not None:
-            hist = await self.cache.get(f"ivhist:{inst.symbol}") or {}
+            if inst.symbol not in self._iv_hist:
+                self._iv_hist[inst.symbol] = await self.cache.get(f"ivhist:{inst.symbol}") or {}
+            hist = self._iv_hist[inst.symbol]
             now = now_ist()
             if atm_iv and is_session_open(now, self.hours) and time.monotonic() - self._iv_saved.get(inst.symbol, 0) > 600:
                 hist[now.date().isoformat()] = atm_iv
                 cutoff = (now.date() - timedelta(days=IV_HISTORY_DAYS)).isoformat()
                 hist = {d: v for d, v in hist.items() if d >= cutoff}
+                self._iv_hist[inst.symbol] = hist
                 await self.cache.set(f"ivhist:{inst.symbol}", hist, IV_HISTORY_DAYS * 86400)
                 self._iv_saved[inst.symbol] = time.monotonic()
         own = opt.iv_percentile(hist, atm_iv)
