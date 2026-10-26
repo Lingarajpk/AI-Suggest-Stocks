@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     # Optional. When empty an in-process TTL cache is used.
     redis_url: str = ""
     # Size cap for the in-memory cache of candles and AI answers (Render's free plan has 512 MB in all).
-    memory_cache_mb: int = 120
+    memory_cache_mb: int = 50
 
     # Site login. APP_USERS = "Name:pbkdf2_sha256.<iterations>.<salt>.<hash>,Name2:..." (python -m app.auth_users hash); empty = open site.
     app_users: str = ""
