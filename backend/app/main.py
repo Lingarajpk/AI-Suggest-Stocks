@@ -63,7 +63,10 @@ class QuoteHub:
             try:
                 await ws.send_json(self._snapshot(await self.service.refresh_quotes()))
             except ProviderError as exc:
-                await ws.send_json({"type": "error", "code": exc.code, "message": exc.message})
+                with contextlib.suppress(Exception):
+                    await ws.send_json({"type": "error", "code": exc.code, "message": exc.message})
+            except Exception:  # the browser closed the tab while connecting
+                self.clients.discard(ws)
 
     def _snapshot(self, quotes: dict) -> dict:
         return {
@@ -177,6 +180,12 @@ async def lifespan(app: FastAPI):
 
     async def warm() -> None:
         # Train the combined-outlook models and pattern stats up front so the first page view is fast.
+        # Runs at start-up and again whenever Upstox connects (at start-up there is often no token yet).
+        try:
+            await service.intraday(include_stocks=True)  # the home page first
+        except Exception as exc:
+            log.info("warm-up of the intraday desk skipped: %s", exc)
+            return
         for tf in ("5m", "15m", "1d"):
             try:
                 await service.outlook_model(tf)
@@ -186,15 +195,21 @@ async def lifespan(app: FastAPI):
                 log.info("warm-up for %s skipped: %s", tf, exc)
         await forex.warm()  # after the stocks, so the two don't compete for the CPU at start-up
 
-    warmer = asyncio.create_task(warm()) if settings.warm_up else None
+    app.state.warmer = asyncio.create_task(warm()) if settings.warm_up else None
+
+    def rewarm() -> None:
+        if settings.warm_up and (app.state.warmer is None or app.state.warmer.done()):
+            app.state.warmer = asyncio.create_task(warm())
+
+    app.state.rewarm = rewarm
     desk_warmer = asyncio.create_task(service.desk_warmer()) if settings.warm_up else None
     forex_desk_warmer = asyncio.create_task(forex.desk_warmer()) if settings.warm_up else None
     options_sampler = asyncio.create_task(service.options_sampler()) if settings.warm_up else None
     keeper = asyncio.create_task(auth_keeper(app, http))
     calendar = asyncio.create_task(calendar_keeper(app))
     yield
-    if warmer:
-        warmer.cancel()
+    if app.state.warmer:
+        app.state.warmer.cancel()
     for task in (desk_warmer, forex_desk_warmer, options_sampler):
         if task:
             task.cancel()
@@ -478,6 +493,7 @@ async def upstox_callback(request: Request, code: str = "", state: str = "", err
         return RedirectResponse(f"{settings.frontend_origin}/?{urlencode({'upstox': 'error', 'message': msg})}")
     await request.app.state.tokens.set(body["access_token"], user_id=body.get("user_id"), user_name=body.get("user_name"))
     request.app.state.hub.poke()
+    request.app.state.rewarm()  # build models and stats now, not on the first page view
     log.info("Upstox access token stored (expires %s)", request.app.state.tokens.status()["expires_at"])
     return RedirectResponse(f"{settings.frontend_origin}/?upstox=connected")
 
@@ -520,6 +536,7 @@ async def upstox_notifier(request: Request):
     await request.app.state.tokens.set(token, expires_at=expires_at, user_id=user_id,
                                        user_name=profile.get("user_name"), source="approval")
     request.app.state.hub.poke()
+    request.app.state.rewarm()  # build models and stats now, not on the first page view
     request.app.state.token_request_until = 0.0
     log.info("Upstox access token received via approval (expires %s)", request.app.state.tokens.status()["expires_at"])
     return {"status": "stored"}
