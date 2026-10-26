@@ -25,7 +25,7 @@ export function isPriority(a: Alert): boolean {
   return list.length === 0 || a.symbol == null || list.includes(a.symbol) || a.kind === "test" || a.kind === "auth";
 }
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/quotes";
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://127.0.0.1:8000/ws/quotes";
 /** REST backup: poll this often while the stream is silent, and start after this long without stream quotes. */
 const POLL_MS = 2000;
 const STALE_MS = 8000;
