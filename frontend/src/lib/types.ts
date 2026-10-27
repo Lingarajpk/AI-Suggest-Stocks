@@ -617,6 +617,8 @@ export interface IntradayLeg {
 }
 
 export interface IntradayCard {
+  /** Index cards: the 1-minute model's prediction for the next 15 minutes (status "training" until it is ready). */
+  next_1m?: { status: string; verdict?: string; up_pct?: number; horizon_label?: string; skill_pct?: number | null; message?: string };
   opening_range?: OpeningRange | null;
   instrument: Instrument;
   quote: Quote | null;

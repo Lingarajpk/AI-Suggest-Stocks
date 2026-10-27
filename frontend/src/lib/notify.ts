@@ -87,7 +87,7 @@ export function showNotification(alert: Alert) {
       window.focus();
       // Fired outside React (OS notification click), so the router isn't available here.
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-      if (alert.symbol) window.location.href = `/stock/${alert.symbol.replace(/\s+/g, "")}?tf=5m`;
+      if (alert.symbol) window.location.href = `/stock/${alert.symbol.replace(/\s+/g, "")}?tf=1m`;
     };
     beep(alert.direction);
   } catch {

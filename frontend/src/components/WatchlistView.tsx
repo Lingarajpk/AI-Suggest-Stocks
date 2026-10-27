@@ -187,7 +187,7 @@ function CallRow({ c, quote, onRemove }: { c: WatchCall; quote: Quote | null; on
     <li className="rounded-2xl border border-line bg-panel p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link href={`/stock/${slug(c.symbol)}?tf=5m`} className="text-base font-semibold hover:text-accent">
+          <Link href={`/stock/${slug(c.symbol)}?tf=1m`} className="text-base font-semibold hover:text-accent">
             {c.symbol}
           </Link>
           <p className="tabular text-sm">

@@ -22,7 +22,7 @@ export function IndexStrip({ quotes }: { quotes: Record<string, Quote> }) {
             className="rounded-2xl border border-line bg-panel px-4 py-3"
           >
             <div className="flex items-center justify-between">
-              <Link href={`/stock/${name.replace(/\s+/g, "")}?tf=5m`} className="text-xs font-medium tracking-wider text-muted hover:text-accent">
+              <Link href={`/stock/${name.replace(/\s+/g, "")}?tf=1m`} className="text-xs font-medium tracking-wider text-muted hover:text-accent">
                 {name} →
               </Link>
               <FreshnessBadge freshness={q?.freshness ?? "unavailable"} />

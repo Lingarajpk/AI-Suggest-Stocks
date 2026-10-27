@@ -186,7 +186,7 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             log.info("warm-up of the intraday desk skipped: %s", exc)
             return
-        for tf in ("5m", "15m", "1d"):
+        for tf in ("1m", "5m", "15m", "1d"):  # 1m: the default chart and the desk's next-15-minutes prediction
             try:
                 await service.outlook_model(tf)
                 await service.pattern_stats(tf)

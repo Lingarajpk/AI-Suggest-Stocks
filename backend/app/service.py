@@ -918,7 +918,8 @@ class MarketService:
             "position": position,
             "action": self._action(verdict, position),
         }
-        if with_chart:
+        if with_chart:  # index cards: also the 1-minute model's next-15-minutes prediction, once trained
+            card["next_1m"] = await self._quick_outlook(inst, "1m")
             days = sorted({c["time"][:10] for c in a5["candles"]})[-CHART_SESSIONS:]
             first = f"{days[0]}T00:00" if days else ""
             cut = next((i for i, c in enumerate(a5["candles"]) if c["time"] >= first), 0)
@@ -930,6 +931,20 @@ class MarketService:
                 "markers": [m for m in (a5.get("history") or {}).get("markers") or [] if m["time"] >= first],
             }
         return card
+
+    async def _quick_outlook(self, inst: Instrument, timeframe: Timeframe) -> dict:
+        """A short prediction from the combined model for this timeframe, without waiting for training."""
+        ready, _ = self.outlook_model_nowait(timeframe)
+        if not ready:
+            return {"status": "training"}
+        try:
+            o = await self.technical_outlook(inst, timeframe)
+        except ProviderError:
+            return {"status": "not_available"}
+        if o.get("status") != "ok":
+            return {"status": o.get("status", "not_available")}
+        return {"status": "ok", "verdict": o["verdict"], "up_pct": o["up_pct"], "horizon_label": o["horizon_label"],
+                "skill_pct": (o.get("test") or {}).get("skill_pct"), "message": o["message"]}
 
     async def _daily_context(self, inst: Instrument, verdict: str) -> dict | None:
         d = await self.daily_trend(inst)

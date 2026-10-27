@@ -91,7 +91,7 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
       <span className={`absolute inset-x-0 top-0 h-1 ${v.bar}`} />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link href={`/stock/${slug(sym)}?tf=5m`} className="text-sm font-semibold text-muted hover:text-accent">
+          <Link href={`/stock/${slug(sym)}?tf=1m`} className="text-sm font-semibold text-muted hover:text-accent">
             {sym}
           </Link>
           <p className="tabular text-[26px] leading-tight font-bold tracking-tight">{fmtPrice(price)}</p>
@@ -113,6 +113,8 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
 
       <p className="mt-3 text-sm text-muted">{card.reason}</p>
       <CardContext card={card} />
+
+      <NextMinute p={card.next_1m} />
 
       <div className="mt-3 flex gap-2">
         <Leg leg={card.entry} label="5-min entry" />
@@ -205,7 +207,7 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
             <Calculator className="size-4" /> {calc ? "Hide calculator" : "Calculator"}
           </button>
         )}
-        <Link href={`/stock/${slug(sym)}?tf=5m`} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full bg-accent text-sm font-semibold text-white hover:opacity-90">
+        <Link href={`/stock/${slug(sym)}?tf=1m`} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full bg-accent text-sm font-semibold text-white hover:opacity-90">
           <Maximize2 className="size-4" /> Open chart
         </Link>
       </div>
@@ -247,7 +249,7 @@ function StockCalls({ title, rows, side, quotes }: { title: string; rows: Intrad
                 return (
                   <tr key={r.instrument.symbol} className="border-b border-line/60 last:border-0 hover:bg-panel-2/60">
                     <td className="py-1.5 pr-2">
-                      <Link href={`/stock/${r.instrument.symbol}?tf=5m`} className="font-semibold hover:text-accent">
+                      <Link href={`/stock/${r.instrument.symbol}?tf=1m`} className="font-semibold hover:text-accent">
                         {r.instrument.symbol}
                       </Link>
                     </td>
@@ -361,5 +363,23 @@ export function IntradayDesk() {
       </main>
       <Disclaimer />
     </>
+  );
+}
+
+/** The 1-minute model's next-15-minutes prediction (a heads-up; the card's call above is the 5/15-minute one). */
+function NextMinute({ p }: { p?: IntradayCard["next_1m"] }) {
+  if (!p) return null;
+  if (p.status !== "ok" || p.up_pct == null) {
+    return p.status === "training" ? <p className="mt-2 text-xs text-faint">1-min prediction: training the model…</p> : null;
+  }
+  const up = p.up_pct;
+  const tone = p.verdict === "BUY" ? "text-bull" : p.verdict === "SELL" ? "text-bear" : "text-muted";
+  return (
+    <p className="mt-2 flex flex-wrap items-center gap-x-2 rounded-xl bg-panel-2 px-3.5 py-2 text-sm" title={p.message}>
+      <span className="font-semibold text-ink">1-min prediction</span>
+      <span className="text-muted">next {p.horizon_label}:</span>
+      <span className={`tabular font-semibold ${tone}`}>{up >= 50 ? `${up.toFixed(0)}% up` : `${(100 - up).toFixed(0)}% down`}</span>
+      <span className={`text-xs font-semibold ${tone}`}>{p.verdict === "NO EDGE" ? "· no proven edge" : `· ${p.verdict}`}</span>
+    </p>
   );
 }

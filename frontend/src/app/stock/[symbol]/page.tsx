@@ -12,6 +12,6 @@ export async function generateMetadata({ params }: PageProps<"/stock/[symbol]">)
 export default async function StockPage({ params, searchParams }: PageProps<"/stock/[symbol]">) {
   const { symbol } = await params;
   const { tf } = await searchParams;
-  const initial = TIMEFRAMES.find((t) => t === tf) ?? "1d";
+  const initial = TIMEFRAMES.find((t) => t === tf) ?? "1m";
   return <StockView symbol={symbol.toUpperCase()} initialTimeframe={initial} />;
 }
