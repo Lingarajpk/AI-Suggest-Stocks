@@ -98,6 +98,7 @@ export function PriceChart({
   const s = useRef<Record<string, ISeriesApi<"Candlestick" | "Histogram" | "Line">>>({});
   const priceLines = useRef<IPriceLine[]>([]);
   const tradeLines = useRef<IPriceLine[]>([]);
+  const shownBarMs = useRef<number | null>(null);
   const markerApi = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
   const patternSeries = useRef<ISeriesApi<"Line">[]>([]);
   const theme = useTheme();
@@ -166,6 +167,7 @@ export function PriceChart({
     return () => {
       c.remove();
       chart.current = null;
+      shownBarMs.current = null;
       s.current = {};
       priceLines.current = [];
       markerApi.current = null;
@@ -188,6 +190,13 @@ export function PriceChart({
     ser.vwap.applyOptions({ visible: intraday && showVwap });
     // Daily/weekly bars have no meaningful clock time: show dates only.
     chart.current.applyOptions({ timeScale: { timeVisible: intraday } });
+    // A different timeframe (bar size) or a fresh chart: show the newest candle at the right edge. Regular
+    // refreshes keep wherever the user has scrolled to.
+    const barMs = candles.length > 1 ? Date.parse(candles.at(-1)!.time) - Date.parse(candles.at(-2)!.time) : 0;
+    if (candles.length && barMs !== shownBarMs.current) {
+      shownBarMs.current = barMs;
+      chart.current.timeScale().scrollToRealTime();
+    }
     for (const k of ["vwap_u1", "vwap_l1", "vwap_u2", "vwap_l2"]) {
       ser[k].setData(pts(series[k]));
       ser[k].applyOptions({ visible: intraday && showVwapBands });
