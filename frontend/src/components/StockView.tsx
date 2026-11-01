@@ -1,5 +1,6 @@
 "use client";
 
+import { EarlySignal } from "./EarlySignal";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Calculator, Layers, Layers3, ShieldAlert, Star } from "lucide-react";
@@ -256,6 +257,7 @@ function CallCard({ data, trade, onCalc, onOptions }: { data: StockDetail; trade
           </button>
         </div>
       </div>
+      <EarlySignal e={data.early} />
       {conflict && (
         <p className="mt-3 rounded-xl bg-warn/10 px-3.5 py-2 text-sm text-warn">
           Signals disagree: the model leans <b>{v}</b> but the chart setup below is a <b>{trade.side}</b>. Better to wait until they agree.

@@ -11,6 +11,7 @@ import { useQuoteStream } from "@/lib/useQuoteStream";
 import { AppHeader } from "./AppHeader";
 import { CardContext } from "./CardContext";
 import { Disclaimer } from "./Disclaimer";
+import { EarlySignal, EarlyTodayLine } from "./EarlySignal";
 import { IntradayChart } from "./IntradayChart";
 import { MarketNews } from "./NewsPanel";
 import { StatusNotices } from "./StatusNotices";
@@ -112,6 +113,7 @@ function IndexCard({ card, quote }: { card: IntradayCard; quote: Quote | null })
       </div>
 
       <p className="mt-3 text-sm text-muted">{card.reason}</p>
+      <EarlySignal e={card.early} />
       <CardContext card={card} />
 
       <NextMinute p={card.next_1m} />
@@ -251,7 +253,8 @@ function StockCalls({ title, rows, side, quotes }: { title: string; rows: Intrad
                     <td className="py-1.5 pr-2">
                       <Link href={`/stock/${r.instrument.symbol}?tf=1m`} className="font-semibold hover:text-accent">
                         {r.instrument.symbol}
-                      </Link>
+                      </Link>{" "}
+                      <EarlySignal e={r.early} compact />
                     </td>
                     <td className="tabular py-1.5 pr-2 text-right">{fmtPrice(q?.last_price ?? r.price)}</td>
                     <td className={`tabular py-1.5 pr-2 text-right ${changeColor(q?.change_pct)}`}>{fmtPct(q?.change_pct)}</td>
@@ -310,6 +313,7 @@ export function IntradayDesk() {
               <Zap className="size-5 text-accent" /> Intraday
             </h1>
             <p className="text-sm text-muted">Index calls from 5-minute timing confirmed by the 15-minute trend</p>
+            <EarlyTodayLine t={data?.early_today} />
           </div>
           <p className="text-xs text-faint">{data ? `Updated ${fmtTime(data.generated_at)} IST` : "Loading…"}</p>
         </div>

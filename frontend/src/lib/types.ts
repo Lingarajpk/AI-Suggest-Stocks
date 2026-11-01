@@ -517,6 +517,7 @@ export interface Point {
 }
 
 export interface StockDetail extends Analysis {
+  early?: EarlySignal | null;
   opening_range?: OpeningRange | null;
   instrument: Instrument;
   timeframe: Timeframe;
@@ -617,6 +618,7 @@ export interface IntradayLeg {
 }
 
 export interface IntradayCard {
+  early?: EarlySignal | null;
   /** Index cards: the 1-minute model's prediction for the next 15 minutes (status "training" until it is ready). */
   next_1m?: { status: string; verdict?: string; up_pct?: number; horizon_label?: string; skill_pct?: number | null; message?: string };
   opening_range?: OpeningRange | null;
@@ -685,6 +687,39 @@ export interface SearchResult {
   kind: "equity" | "index";
 }
 
+/** Early signal: the intraday call on the still-forming 5-minute candle (before it closes). */
+export interface EarlySignal {
+  status: "live" | "confirming" | "confirmed" | "cancelled";
+  side: "BUY" | "SELL";
+  bar: string;
+  since: string;
+  confirms_at: string;
+  price: number;
+  levels?: { entry: number; target: number; stop: number; basis: string } | null;
+  /** Live only: is the forming candle still pointing this way right now? */
+  active?: boolean;
+  score?: number | null;
+  up_pct?: number | null;
+  basis?: string;
+  symbol?: string;
+  resolved_at?: string;
+  resolve_price?: number | null;
+  edge_pct?: number | null;
+}
+
+export interface EarlyToday {
+  fired: number;
+  confirmed: number;
+  cancelled: number;
+  /** Live or waiting for their candle's close. */
+  open: number;
+  confirmed_pct: number | null;
+  avg_minutes_earlier: number | null;
+  avg_entry_edge_pct: number | null;
+  avg_cancelled_move_pct: number | null;
+  recent: EarlySignal[];
+}
+
 export interface IntradayDesk {
   generated_at: string;
   source: "upstox" | "demo";
@@ -695,6 +730,7 @@ export interface IntradayDesk {
   unavailable_indices: string[];
   method: string;
   stocks?: { buy: IntradayCard[]; sell: IntradayCard[]; waiting: number; scanned: number };
+  early_today?: EarlyToday;
 }
 
 export interface Explanation {

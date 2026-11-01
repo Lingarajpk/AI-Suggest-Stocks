@@ -1,5 +1,6 @@
 "use client";
 
+import { EarlySignal } from "./EarlySignal";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BellRing, Calculator, Plus, Search, Send, Smartphone, Star, X } from "lucide-react";
@@ -189,7 +190,8 @@ function CallRow({ c, quote, onRemove }: { c: WatchCall; quote: Quote | null; on
         <div className="min-w-0">
           <Link href={`/stock/${slug(c.symbol)}?tf=1m`} className="text-base font-semibold hover:text-accent">
             {c.symbol}
-          </Link>
+          </Link>{" "}
+          <EarlySignal e={c.early} compact />
           <p className="tabular text-sm">
             {fmtPrice(price)} <span className={changeColor(quote?.change_pct)}>{fmtPct(quote?.change_pct)}</span>
           </p>

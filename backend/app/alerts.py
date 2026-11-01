@@ -32,7 +32,9 @@ from app.service import MarketService
 
 log = logging.getLogger(__name__)
 Listener = Callable[[dict], Awaitable[None]]
-PUSH_KINDS = ("intraday", "trade", "test")
+PUSH_KINDS = ("intraday", "trade", "test", "early", "earlydone")
+EARLY_CHECK_SECONDS = 10  # how often the forming candle is re-scored for early signals
+EARLY_MAX_WATCHED = 10
 EXIT_TEXT = {"target": "target reached", "stop": "stop-loss hit", "signal_ended": "signal ended"}
 
 
@@ -74,6 +76,7 @@ class AlertEngine:
         self._fired: dict[str, datetime] = {}
         self._prices: dict[str, deque[tuple[datetime, float]]] = {}
         self._last_signal_check: datetime | None = None
+        self._last_early_check: datetime | None = None
         self._closing_check_done: str | None = None
         self._task: asyncio.Task | None = None
         self.levels = sorted({abs(float(x)) for x in settings.alert_move_levels.split(",") if x.strip()})
@@ -97,6 +100,9 @@ class AlertEngine:
             if self.session_open(now):
                 try:
                     await self.check_quotes(await self.service.refresh_quotes())
+                    if not self._last_early_check or now - self._last_early_check >= timedelta(seconds=EARLY_CHECK_SECONDS):
+                        self._last_early_check = now
+                        await self.check_early()
                     if not self._last_signal_check or now - self._last_signal_check >= timedelta(seconds=60):
                         self._last_signal_check = now
                         await self.check_signals()
@@ -229,6 +235,52 @@ class AlertEngine:
         for card in cards:
             await self._exit_alert(card, desk["entry_timeframe"], now)
             await self._entry_alert(card, desk["entry_timeframe"], now)
+
+    async def check_early(self) -> None:
+        """Early signals for the indices and every watchlist stock, scored on the forming 5-minute candle."""
+        now = self.clock()
+        desk = await self.service.intraday(include_stocks=False)
+        cards = [c for c in desk["indices"] if "error" not in c]
+        names = {c["instrument"]["symbol"] for c in cards}
+        watched = [s for s in (self.watchlists.all_symbols() if self.watchlists else []) if s not in names][:EARLY_MAX_WATCHED]
+        if watched:
+            cards += [r for r in (await self.service.watchlist_calls(watched))["rows"] if "error" not in r]
+        early = self.service.early
+        for card in cards:
+            sym = card["instrument"]["symbol"]
+            inst = await self.service.instrument(sym)
+            if inst is None:
+                continue
+            q = self.service.cached_quote(inst.instrument_key)
+            price = q.last_price if q else card.get("price")
+            done = early.resolve(sym, card.get("last_candle_time"), {"BUY": 1, "SELL": -1}.get(card["verdict"], 0), price, now)
+            if done:
+                ok = done["status"] == "confirmed"
+                edge = f" Early entry was {done['edge_pct']:+.2f}% vs the close." if ok and done.get("edge_pct") is not None else ""
+                await self._emit_once(
+                    f"earlydone:{sym}:{done['bar']}", "up" if done["side"] == "BUY" else "down",
+                    f"{'✔ Confirmed' if ok else '✖ Cancelled'}: early {done['side']} {sym}",
+                    (f"The candle closed and the {done['side']} call is now confirmed.{edge}" if ok else
+                     f"The candle closed without confirming the early {done['side']}: stay out (or exit if you entered early)."),
+                    sym, q)
+            try:
+                side, info = await self.service.early_side(inst, card)
+            except ProviderError as exc:
+                if exc.http_status == 401:
+                    raise
+                continue
+            if not info:  # no live price or no trend right now: leave any early signal to its candle's close
+                continue
+            fired = early.update(sym, side, info["bar"], now, info["price"], info.get("levels"),
+                                 {k: info[k] for k in ("score", "up_pct", "basis")})
+            if fired:
+                lv = fired.get("levels") or {}
+                levels = f" Target {lv['target']:,.2f}, stop {lv['stop']:,.2f}." if lv else ""
+                await self._emit_once(
+                    f"early:{sym}:{fired['bar']}", "up" if fired["side"] == "BUY" else "down",
+                    f"⚡ EARLY {fired['side']}: {sym} (not confirmed yet)",
+                    f"{sym} at {fired['price']:,.2f}. The forming 5-min candle already lines up with the 15-min trend; "
+                    f"it confirms at the {fired['confirms_at'][11:16]} close.{levels}", sym, q)
 
     async def _exit_alert(self, card: dict, tf: str, now: datetime) -> None:
         pos = card.get("position")
@@ -392,7 +444,7 @@ class AlertEngine:
         sym = alert["symbol"]
         targets = (self.watchlists.push_everyone() if sym is None else self.watchlists.push_targets(sym))
         payload = {"title": alert["title"], "body": alert["message"], "tag": f"ai-stock-{alert['kind']}-{sym or 'all'}",
-                   "url": f"/stock/{sym.replace(' ', '')}?tf=5m" if sym else "/watchlist"}
+                   "url": f"/stock/{sym.replace(' ', '')}?tf=1m" if sym else "/watchlist"}
         for device, sub in targets:
             if not await self.push.send(sub, payload):
                 await self.watchlists.set_push(device, None)  # subscription expired or revoked

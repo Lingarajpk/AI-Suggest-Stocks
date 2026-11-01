@@ -578,7 +578,7 @@ async def watchlist_calls(request: Request, device: str, s: str = Query("", max_
     which the page sends so a change shows up before it has synced)."""
     store = watch_store(request, device)
     symbols = clean_symbols(s.split(",")) if s else store.get(device)["symbols"]
-    return await svc(request).watchlist_calls(symbols)
+    return _with_early(svc(request), await svc(request).watchlist_calls(symbols), ("rows",))
 
 
 @app.get("/api/push/key")
@@ -656,7 +656,21 @@ async def pattern_stats(request: Request, timeframe: Timeframe = Query("1d")):
 @app.get("/api/intraday")
 async def intraday(request: Request, stocks: bool = Query(True)):
     """Intraday desk: NIFTY 50 / BANK NIFTY / SENSEX 5-minute BUY/SELL (confirmed by 15-minute), then stocks."""
-    return await svc(request).intraday(include_stocks=stocks)
+    service = svc(request)
+    desk = await service.intraday(include_stocks=stocks)
+    out = {**_with_early(service, desk, ("indices",)), "early_today": service.early.summary(now_ist().date().isoformat())}
+    if desk.get("stocks"):
+        out["stocks"] = _with_early(service, desk["stocks"], ("buy", "sell"))
+    return out
+
+
+def _with_early(service, block: dict, lists: tuple[str, ...]) -> dict:
+    """Copy of a desk block with each card's early signal (computed every few seconds, so not cached with the desk)."""
+    out = dict(block)
+    for name in lists:
+        out[name] = [{**c, "early": service.early_view(c["instrument"]["symbol"])} if "instrument" in c else c
+                     for c in block.get(name) or []]
+    return out
 
 
 @app.get("/api/options/{symbol}")
@@ -892,6 +906,7 @@ async def _stock_detail(request: Request, symbol: str, timeframe: Timeframe) -> 
         "generated_at": now_ist().isoformat(),
         "model_outlook": outlook,
         **analysis,
+        "early": service.early_view(inst.symbol),
     }
 
 

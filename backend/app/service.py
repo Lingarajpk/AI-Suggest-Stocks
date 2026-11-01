@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 
 from app import options as opt
 from app.analysis import dataquality as dq
+from app.analysis.early import EarlyTracker
 from app.analysis import indicators as ta
 from app.analysis import market as mk
 from app.analysis import metalabel as ml
@@ -21,7 +22,7 @@ from app.analysis.history import signal_history
 from app.analysis.signals import evaluate
 from app.config import Settings
 from app.market_session import EQUITY, MarketHours, is_session_open, now_ist, session_state
-from app.models import Instrument, Quote, Timeframe, is_intraday
+from app.models import Candle, Instrument, Quote, Timeframe, is_intraday
 from app.providers.base import SECTOR_INDICES, VIX_INDEX, MarketDataProvider, ProviderError, drop_incomplete, live_bar_start
 from app.watchlists import SYMBOL_RE
 
@@ -128,6 +129,7 @@ class MarketService:
         self._positions: dict[str, dict] = {}
         # symbol -> (intraday verdict, candle it was first seen on, seen since startup only = not a fresh change)
         self._intraday_state: dict[str, tuple[str, str, bool]] = {}
+        self.early = EarlyTracker()  # early signals on the forming 5-minute candle
         self._training: dict[str, asyncio.Task] = {}
         # Work that only changes when a candle completes: (instrument_key, timeframe, part) -> (stamp, value)
         self._memo: dict[tuple, tuple[tuple, object]] = {}
@@ -931,6 +933,52 @@ class MarketService:
                 "markers": [m for m in (a5.get("history") or {}).get("markers") or [] if m["time"] >= first],
             }
         return card
+
+    async def early_side(self, inst: Instrument, card: dict) -> tuple[int, dict]:
+        """The intraday call scored on the still-forming 5-minute candle at the live price: +1 / -1 when the
+        5-minute side would already agree with the 15-minute trend (and the confirmed call isn't that side yet),
+        else 0. Scored the same way as the confirmed 5-minute leg (the combined model when it is used, else rules)."""
+        now = now_ist()
+        l15 = (card.get("trend") or {}).get("lean", 0)
+        quote = self.cached_quote(inst.instrument_key)
+        if card.get("verdict") == "NO TRADE" or not l15 or not quote or not quote.last_price or not is_session_open(now, self.hours):
+            return 0, {}
+        price = float(quote.last_price)
+        bar = live_bar_start(now, 5, self.hours)
+        candles = list(await self.provider.candles(inst, ENTRY_TF, include_partial=True))
+        if candles and candles[-1].time >= bar:
+            last = candles[-1]
+            candles[-1] = last.model_copy(update={"high": max(last.high, price), "low": min(last.low, price), "close": price})
+        else:
+            candles.append(Candle(time=bar, open=price, high=price, low=price, close=price, volume=0))
+        candles = candles[-600:]  # plenty for every indicator, and quick to score every few seconds
+        use_model = (card.get("entry") or {}).get("basis") == "model"
+        built = (self._models.get(ENTRY_TF) or (None, None))[1] if use_model else None
+
+        def work():
+            df = ta.to_frame(candles)
+            ind = ta.compute(df, intraday=True)
+            sig = evaluate(df, ind, ENTRY_TF, now, quote.freshness)
+            o = None
+            if built is not None:
+                found = pt.detect(df, ind)
+                strat = sx.compute(df, ind, ENTRY_TF)
+                o = pb.outlook(built, pb.features(df, ind, found, strat["features"]), ENTRY_TF, True, [])
+            return sig, o, ind["atr14"].iloc[-1]
+
+        sig, o, atr = await asyncio.to_thread(work)
+        l5, how, up = _lean(o, sig["score"], ENTRY_BUY, ENTRY_SELL)
+        confirmed = {"BUY": 1, "SELL": -1}.get(card.get("verdict"), 0)
+        side = l5 if l5 == l15 and l5 != confirmed else 0
+        info = {"score": sig["score"], "up_pct": up, "basis": how}
+        levels = None
+        if side and atr == atr and atr:
+            levels = {"entry": round(price, 4), "target": round(price + side * 2.5 * atr, 4), "stop": round(price - side * 1.5 * atr, 4),
+                      "basis": "ATR(14) on 5-minute candles: stop 1.5 ATR, target 2.5 ATR"}
+        return side, {**info, "bar": bar, "price": price, "levels": levels}
+
+    def early_view(self, symbol: str) -> dict | None:
+        return self.early.view(symbol, now_ist())
 
     async def _quick_outlook(self, inst: Instrument, timeframe: Timeframe) -> dict:
         """A short prediction from the combined model for this timeframe, without waiting for training."""
