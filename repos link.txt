@@ -1,0 +1,25 @@
+https://github.com/TauricResearch/TradingAgents.git
+
+https://github.com/freqtrade/freqtrade.git
+
+https://github.com/polakowo/vectorbt.git
+
+https://github.com/mementum/backtrader.git
+
+https://github.com/hummingbot/hummingbot.git
+
+https://github.com/ccxt/ccxt.git
+
+https://github.com/AI4Finance-Foundation/FinRL.git
+
+https://github.com/nautechsystems/nautilus_trader.git
+
+https://github.com/bitquery/polymarket-api.git
+
+https://github.com/Lumiwealth/lumibot.git
+
+Upstash redis
+Token : gQAAAAAAA2zhAAIgcDFjZmQwZTNlZTBlZjI0MWRmYTU1OTE5MDk5YzgwYzExMA
+End point : redis-cli --tls -u redis://default:gQAAAAAAA2zhAAIgcDFjZmQwZTNlZTBlZjI0MWRmYTU1OTE5MDk5YzgwYzExMA@chief-jackal-224481.upstash.io:6379
+redis URL : REDIS_URL="rediss://default:gQAAAAAAA2zhAAIgcDFjZmQwZTNlZTBlZjI0MWRmYTU1OTE5MDk5YzgwYzExMA@chief-jackal-224481.upstash.io:6379"
+
